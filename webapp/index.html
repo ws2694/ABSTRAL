@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ABSTRAL — Research Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Variables ────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg-0: #06080f; --bg-1: #0c0f18; --bg-2: #121722; --bg-3: #1a2030;
+  --bg-hover: #222940; --bg-card: #141924;
+  --border: #1e2636; --border-light: #2a3348;
+  --accent: #818cf8; --accent-dim: #6366f1; --accent-glow: rgba(129,140,248,0.12);
+  --cyan: #22d3ee; --cyan-dim: rgba(34,211,238,0.12);
+  --green: #34d399; --green-dim: rgba(52,211,153,0.12);
+  --amber: #fbbf24; --amber-dim: rgba(251,191,36,0.12);
+  --red: #f87171; --red-dim: rgba(248,113,113,0.12);
+  --purple: #c084fc; --purple-dim: rgba(192,132,252,0.12);
+  --pink: #f472b6; --pink-dim: rgba(244,114,182,0.12);
+  --text: #e2e5eb; --text-2: #9ca3b4; --text-3: #636b7e;
+  --mono: 'JetBrains Mono', monospace; --sans: 'Inter', -apple-system, sans-serif;
+  --r: 8px; --r-sm: 5px; --r-lg: 12px;
+}
+html, body { height: 100%; background: var(--bg-0); color: var(--text); font-family: var(--sans); font-size: 13px; line-height: 1.5; overflow: hidden; }
+a { color: var(--accent); text-decoration: none; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select, textarea { font-family: inherit; color: var(--text); background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 10px; font-size: 12px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3a4560; }
+
+/* ── Layout ───────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; height: 100vh; }
+.header { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; height: 48px; background: var(--bg-1); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 14px; letter-spacing: 2px; }
+.logo-mark { width: 26px; height: 26px; background: linear-gradient(135deg, var(--accent), var(--purple)); border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 900; color: #fff; }
+.header-r { display: flex; align-items: center; gap: 14px; }
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+.badge.idle { background: var(--bg-3); color: var(--text-3); }
+.badge.running { background: var(--accent-glow); color: var(--accent); }
+.badge.completed { background: var(--green-dim); color: var(--green); }
+.badge.stopped { background: var(--amber-dim); color: var(--amber); }
+.badge.error { background: var(--red-dim); color: var(--red); }
+.dot { width: 6px; height: 6px; border-radius: 50%; }
+.badge.running .dot { background: var(--accent); animation: pulse 1.5s infinite; }
+.badge.idle .dot { background: var(--text-3); }
+.badge.completed .dot { background: var(--green); }
+.badge.stopped .dot { background: var(--amber); }
+.badge.error .dot { background: var(--red); }
+@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.35 } }
+.ws-ind { font-size: 10px; color: var(--text-3); display: flex; align-items: center; gap: 4px; }
+.ws-ind .dot { width: 5px; height: 5px; }
+.ws-ind .dot.ok { background: var(--green); }
+
+/* Tabs */
+.tabs { display: flex; gap: 1px; padding: 0 20px; background: var(--bg-1); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.tab { padding: 9px 16px; font-size: 12px; font-weight: 500; color: var(--text-3); border-bottom: 2px solid transparent; transition: .2s; }
+.tab:hover { color: var(--text-2); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab .cnt { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent-glow); color: var(--accent); font-size: 10px; font-weight: 700; margin-left: 5px; }
+
+/* Content */
+.main { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* ── Shared Components ────────────────────────────────────── */
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r); padding: 16px; }
+.card-h { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-3); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.card-h .ico { font-size: 12px; }
+.btn { padding: 7px 16px; border-radius: var(--r-sm); font-size: 12px; font-weight: 600; transition: .15s; }
+.btn-p { background: var(--accent-dim); color: #fff; }
+.btn-p:hover { background: var(--accent); }
+.btn-p:disabled { opacity: .35; cursor: not-allowed; }
+.btn-d { background: var(--red-dim); color: var(--red); border: 1px solid rgba(248,113,113,.2); }
+.btn-d:hover { background: rgba(248,113,113,.2); }
+.btn-s { background: var(--bg-3); color: var(--text-2); border: 1px solid var(--border); }
+.btn-s:hover { background: var(--bg-hover); color: var(--text); }
+.grid { display: grid; gap: 12px; }
+.g2 { grid-template-columns: 1fr 1fr; }
+.g3 { grid-template-columns: 1fr 1fr 1fr; }
+.g4 { grid-template-columns: repeat(4, 1fr); }
+.g5 { grid-template-columns: repeat(5, 1fr); }
+.g6 { grid-template-columns: repeat(6, 1fr); }
+
+/* Metric Card */
+.mc { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r); padding: 14px 16px; }
+.mc-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--text-3); margin-bottom: 4px; }
+.mc-val { font-size: 24px; font-weight: 700; font-family: var(--mono); line-height: 1.2; }
+.mc-sub { font-size: 10px; color: var(--text-3); margin-top: 2px; }
+
+/* Progress */
+.pbar { width: 100%; height: 4px; background: var(--bg-1); border-radius: 2px; overflow: hidden; }
+.pfill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); border-radius: 2px; transition: width .4s; }
+
+/* Pipeline Stepper */
+.stepper { display: flex; align-items: center; gap: 0; margin-bottom: 14px; padding: 12px 16px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r); }
+.step { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 16px; font-size: 11px; font-weight: 600; letter-spacing: .3px; color: var(--text-3); background: transparent; transition: .2s; white-space: nowrap; }
+.step.done { color: var(--green); background: var(--green-dim); }
+.step.active { color: var(--accent); background: var(--accent-glow); animation: pulse 2s infinite; }
+.step-arrow { color: var(--text-3); font-size: 16px; margin: 0 4px; opacity: .4; }
+
+/* Topo Badge */
+.topo { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .3px; }
+.topo.single { background: var(--green-dim); color: var(--green); }
+.topo.pipeline { background: var(--accent-glow); color: var(--accent); }
+.topo.ensemble { background: var(--amber-dim); color: var(--amber); }
+.topo.debate { background: var(--red-dim); color: var(--red); }
+.topo.hierarchical { background: var(--purple-dim); color: var(--purple); }
+.topo.dynamic { background: var(--pink-dim); color: var(--pink); }
+
+/* EC Badge */
+.ec { display: inline-block; padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 700; font-family: var(--mono); }
+.ec-EC1 { background: var(--red-dim); color: var(--red); }
+.ec-EC2 { background: var(--amber-dim); color: var(--amber); }
+.ec-EC3 { background: var(--cyan-dim); color: var(--cyan); }
+.ec-EC4 { background: var(--purple-dim); color: var(--purple); }
+.ec-EC5 { background: var(--green-dim); color: var(--green); }
+
+/* Log */
+.log-box { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r); height: 200px; overflow-y: auto; font-family: var(--mono); font-size: 11px; line-height: 1.8; }
+.log-e { padding: 1px 12px; border-bottom: 1px solid rgba(30,38,54,.5); }
+.log-e:hover { background: var(--bg-2); }
+.log-e .ts { color: var(--text-3); margin-right: 8px; font-size: 10px; }
+.log-e.info .msg { color: var(--text); }
+.log-e.warn .msg { color: var(--amber); }
+.log-e.error .msg { color: var(--red); }
+
+/* Table */
+.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tbl th { text-align: left; padding: 8px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); border-bottom: 1px solid var(--border); background: var(--bg-2); position: sticky; top: 0; z-index: 1; }
+.tbl td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; }
+.tbl tr:hover td { background: var(--bg-hover); }
+.tbl tr.best td { background: rgba(129,140,248,.04); }
+
+/* ── Dashboard Panel ──────────────────────────────────────── */
+.dash-controls { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+.dash-controls .fld { display: flex; flex-direction: column; gap: 3px; }
+.dash-controls .fld label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); }
+.dash-controls .fld input, .dash-controls .fld select { width: 120px; }
+.dash-controls .acts { display: flex; gap: 6px; margin-left: auto; }
+.chart-box { position: relative; height: 220px; }
+
+/* ── Iteration Detail ─────────────────────────────────────── */
+.iter-expand { display: none; }
+.iter-expand.open { display: table-row; }
+.iter-expand td { padding: 0; background: var(--bg-1); }
+.iter-detail { padding: 16px; }
+.detail-tabs { display: flex; gap: 1px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.dtab { padding: 7px 14px; font-size: 11px; font-weight: 600; color: var(--text-3); border-bottom: 2px solid transparent; cursor: pointer; }
+.dtab:hover { color: var(--text-2); }
+.dtab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.dpanel { display: none; }
+.dpanel.active { display: block; }
+
+/* Agent Spec */
+.spec-agents { display: flex; gap: 10px; flex-wrap: wrap; }
+.spec-agent { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r); padding: 12px; flex: 1; min-width: 200px; }
+.spec-agent-name { font-weight: 700; font-size: 12px; margin-bottom: 4px; color: var(--accent); }
+.spec-agent-role { font-size: 11px; color: var(--text-2); margin-bottom: 6px; }
+.spec-agent-tools { display: flex; gap: 4px; flex-wrap: wrap; }
+.spec-agent-tools .chip { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--cyan-dim); color: var(--cyan); font-family: var(--mono); }
+
+/* Finding Card */
+.finding { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; margin-bottom: 8px; }
+.finding-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.finding-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+
+/* Diff */
+.diff-box { font-family: var(--mono); font-size: 11px; line-height: 1.6; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 12px; overflow-x: auto; max-height: 300px; overflow-y: auto; }
+.diff-add { color: var(--green); }
+.diff-del { color: var(--red); }
+.diff-hdr { color: var(--cyan); }
+.diff-ctx { color: var(--text-3); }
+
+/* Skill Edit */
+.skill-edit-box { display: flex; flex-direction: column; gap: 10px; }
+.skill-edit-box textarea { flex: 1; font-family: var(--mono); font-size: 11px; line-height: 1.7; padding: 14px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r); resize: none; color: var(--text); tab-size: 2; min-height: 400px; }
+
+/* ── Trace Panel ──────────────────────────────────────────── */
+.trace-layout { display: grid; grid-template-columns: 280px 1fr; gap: 12px; height: calc(100vh - 130px); }
+.trace-side { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r); overflow-y: auto; display: flex; flex-direction: column; }
+.trace-side-hdr { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.trace-side-hdr select, .trace-side-hdr input { width: 100%; font-size: 11px; }
+.trace-list { flex: 1; overflow-y: auto; padding: 4px; }
+.trace-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer; font-size: 11px; font-family: var(--mono); }
+.trace-item:hover { background: var(--bg-hover); }
+.trace-item.active { background: var(--accent-glow); color: var(--accent); }
+.trace-item .outcome { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.trace-item .outcome.correct { background: var(--green); }
+.trace-item .outcome.wrong { background: var(--red); }
+.trace-item .score { margin-left: auto; font-size: 10px; color: var(--text-3); }
+.trace-view { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r); overflow-y: auto; padding: 16px; }
+.trace-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-3); font-size: 13px; }
+
+/* Agent Trace */
+.at-block { margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
+.at-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-2); border-bottom: 1px solid var(--border); cursor: pointer; }
+.at-head:hover { background: var(--bg-hover); }
+.at-agent { font-weight: 700; font-size: 12px; color: var(--accent); }
+.at-meta { font-size: 10px; color: var(--text-3); font-family: var(--mono); margin-left: auto; }
+.at-body { padding: 12px; display: none; }
+.at-block.open .at-body { display: block; }
+.at-reason { font-size: 12px; line-height: 1.6; color: var(--text-2); margin-bottom: 10px; white-space: pre-wrap; word-break: break-word; }
+.tc-block { margin-bottom: 8px; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.tc-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--amber-dim); cursor: pointer; font-size: 11px; font-weight: 600; color: var(--amber); }
+.tc-head:hover { opacity: .8; }
+.tc-body { display: none; padding: 8px 10px; background: var(--bg-1); font-family: var(--mono); font-size: 10px; line-height: 1.5; }
+.tc-block.open .tc-body { display: block; }
+.tc-io { margin-bottom: 6px; }
+.tc-io-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); margin-bottom: 2px; }
+.tc-io pre { white-space: pre-wrap; word-break: break-word; color: var(--text-2); max-height: 200px; overflow-y: auto; }
+.pred-box { padding: 12px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); margin-top: 12px; }
+.pred-box h4 { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--text-3); margin-bottom: 8px; }
+.pred-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.pred-item { text-align: center; }
+.pred-item .k { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); }
+.pred-item .v { font-size: 16px; font-weight: 700; font-family: var(--mono); }
+.pred-item .v.ok { color: var(--green); }
+.pred-item .v.fail { color: var(--red); }
+
+/* ── Skill Panel ──────────────────────────────────────────── */
+.skill-layout { display: grid; grid-template-columns: 180px 1fr; gap: 12px; height: calc(100vh - 130px); }
+.ver-side { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r); overflow-y: auto; }
+.ver-side-hdr { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--text-3); }
+.ver-item { padding: 8px 12px; cursor: pointer; font-size: 11px; font-family: var(--mono); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.ver-item:hover { background: var(--bg-hover); }
+.ver-item.active { background: var(--accent-glow); color: var(--accent); }
+.ver-item .sz { font-size: 9px; color: var(--text-3); }
+
+/* ── Analysis Panel ───────────────────────────────────────── */
+.analysis-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ec-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.ec-count { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; font-family: var(--mono); }
+
+/* ── Settings ─────────────────────────────────────────────── */
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.sfld { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.sfld label { font-size: 11px; color: var(--text-2); }
+.sfld input, .sfld select { width: 100%; }
+.prereq { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.prereq .icon { font-size: 14px; }
+.prereq .detail { margin-left: auto; font-size: 10px; color: var(--text-3); font-family: var(--mono); }
+
+@media (max-width: 1100px) {
+  .g4, .g5, .g6 { grid-template-columns: repeat(3, 1fr); }
+  .trace-layout { grid-template-columns: 1fr; height: auto; }
+  .skill-layout { grid-template-columns: 1fr; height: auto; }
+  .analysis-layout { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .g2, .g3, .g4, .g5, .g6 { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ═══ Header ═══════════════════════════════════════════ -->
+<header class="header">
+  <div class="logo"><div class="logo-mark">A</div>ABSTRAL</div>
+  <div class="header-r">
+    <div class="ws-ind"><div class="dot" id="ws-dot"></div><span id="ws-label">Disconnected</span></div>
+    <div class="badge idle" id="status-badge"><div class="dot"></div><span id="status-text">Idle</span></div>
+  </div>
+</header>
+
+<!-- ═══ Tabs ═════════════════════════════════════════════ -->
+<nav class="tabs">
+  <button class="tab active" data-tab="dashboard">Command Center</button>
+  <button class="tab" data-tab="iterations">Iterations <span class="cnt" id="iter-cnt" style="display:none">0</span></button>
+  <button class="tab" data-tab="traces">Trace Inspector</button>
+  <button class="tab" data-tab="analysis">Analysis</button>
+  <button class="tab" data-tab="skill">Skill Lab</button>
+  <button class="tab" data-tab="settings">Config</button>
+</nav>
+
+<!-- ═══ Content ═════════════════════════════════════════ -->
+<main class="main">
+
+<!-- ──── Command Center ─────────────────────────────── -->
+<section id="p-dashboard" class="panel active">
+  <!-- Pipeline Stepper -->
+  <div class="stepper" id="stepper">
+    <div class="step" data-step="build">BUILD</div>
+    <span class="step-arrow">&#x2192;</span>
+    <div class="step" data-step="run">RUN</div>
+    <span class="step-arrow">&#x2192;</span>
+    <div class="step" data-step="eval">EVALUATE</div>
+    <span class="step-arrow">&#x2192;</span>
+    <div class="step" data-step="analyze">ANALYZE</div>
+    <span class="step-arrow">&#x2192;</span>
+    <div class="step" data-step="update">UPDATE</div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="grid g6" style="margin-bottom:12px">
+    <div class="mc"><div class="mc-label">Status</div><div class="mc-val" id="d-status" style="font-size:16px">Idle</div><div class="mc-sub" id="d-status-sub">Ready to start</div></div>
+    <div class="mc"><div class="mc-label">Iteration</div><div class="mc-val" id="d-iter">--</div><div class="mc-sub" id="d-iter-sub">of 15</div></div>
+    <div class="mc"><div class="mc-label">Best AUC</div><div class="mc-val" style="color:var(--green)" id="d-auc">--</div><div class="mc-sub" id="d-auc-sub">&nbsp;</div></div>
+    <div class="mc"><div class="mc-label">Best AUPRC</div><div class="mc-val" style="color:var(--cyan)" id="d-auprc">--</div><div class="mc-sub" id="d-auprc-sub">&nbsp;</div></div>
+    <div class="mc"><div class="mc-label">Tokens/Case</div><div class="mc-val" id="d-tokens">--</div><div class="mc-sub" id="d-tokens-sub">&nbsp;</div></div>
+    <div class="mc"><div class="mc-label">Topology</div><div class="mc-val" id="d-topo" style="font-size:14px">--</div><div class="mc-sub" id="d-topo-sub">&nbsp;</div></div>
+  </div>
+
+  <!-- Controls -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="dash-controls">
+      <div class="fld"><label>Iterations</label><input type="number" id="ctrl-iters" value="15" min="1" max="50"></div>
+      <div class="fld"><label>Sandbox</label><input type="number" id="ctrl-sandbox" value="150" min="5" max="1000"></div>
+      <div class="fld"><label>Model</label><select id="ctrl-model">
+        <option value="claude-sonnet-4-20250514">claude-sonnet-4</option>
+        <option value="claude-haiku-4-5-20251001">claude-haiku-4.5</option>
+        <option value="claude-opus-4-6">claude-opus-4.6</option>
+      </select></div>
+      <div class="fld"><label>Seed</label><input type="number" id="ctrl-seed" value="42" min="0" style="width:70px"></div>
+      <div class="acts">
+        <button class="btn btn-p" id="btn-start" onclick="startRun()">Start Run</button>
+        <button class="btn btn-d" id="btn-stop" onclick="stopRun()" disabled>Stop</button>
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <div class="pbar"><div class="pfill" id="pfill" style="width:0%"></div></div>
+      <div style="font-size:10px;color:var(--text-3);margin-top:3px" id="plabel">&nbsp;</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="grid g2" style="margin-bottom:12px">
+    <div class="card"><div class="card-h">AUC / AUPRC Trajectory</div><div class="chart-box"><canvas id="ch-auc"></canvas></div></div>
+    <div class="card"><div class="card-h">Tokens & CCS per Iteration</div><div class="chart-box"><canvas id="ch-eff"></canvas></div></div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <div class="card-h">Event Log</div>
+    <div class="log-box" id="log-box"><div style="padding:30px;text-align:center;color:var(--text-3)">Waiting for events...</div></div>
+  </div>
+</section>
+
+<!-- ──── Iterations ──────────────────────────────────── -->
+<section id="p-iterations" class="panel">
+  <div class="card" style="overflow:auto; max-height:calc(100vh - 130px)">
+    <table class="tbl" id="iter-tbl">
+      <thead><tr>
+        <th style="width:36px">#</th><th>Topology</th><th>Agents</th><th>AUC</th><th>AUPRC</th><th>Brier</th><th>CCS</th><th>Tokens</th><th>Accuracy</th><th style="width:30px"></th>
+      </tr></thead>
+      <tbody id="iter-tbody">
+        <tr><td colspan="10" style="text-align:center;color:var(--text-3);padding:40px">No iterations yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ──── Trace Inspector ─────────────────────────────── -->
+<section id="p-traces" class="panel">
+  <div class="trace-layout">
+    <div class="trace-side">
+      <div class="trace-side-hdr">
+        <select id="tr-iter-sel" onchange="loadTraces()"><option value="">Select iteration...</option></select>
+        <input type="text" id="tr-search" placeholder="Filter patient ID..." oninput="filterTraces()">
+        <div style="font-size:10px;color:var(--text-3)" id="tr-stats"></div>
+      </div>
+      <div class="trace-list" id="tr-list"></div>
+    </div>
+    <div class="trace-view" id="tr-view"><div class="trace-empty">Select a trace to inspect</div></div>
+  </div>
+</section>
+
+<!-- ──── Analysis ────────────────────────────────────── -->
+<section id="p-analysis" class="panel">
+  <div style="margin-bottom:12px">
+    <select id="an-iter-sel" onchange="loadAnalysis()" style="width:220px">
+      <option value="">Select iteration...</option>
+    </select>
+  </div>
+  <div class="analysis-layout">
+    <div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-h">Evidence Class Distribution</div>
+        <div class="ec-summary" id="an-ec-summary"></div>
+        <div style="height:200px"><canvas id="ch-ec"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-h">Skill Updates (Diff Log)</div>
+        <div id="an-diffs"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-h">Findings</div>
+        <div id="an-findings"><div style="color:var(--text-3);padding:20px;text-align:center">Select an iteration</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ──── Skill Lab ───────────────────────────────────── -->
+<section id="p-skill" class="panel">
+  <div class="skill-layout">
+    <div class="ver-side">
+      <div class="ver-side-hdr">Versions</div>
+      <div id="ver-list">
+        <div class="ver-item active" onclick="loadCurrentSkill()">Current</div>
+      </div>
+    </div>
+    <div class="skill-edit-box">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;font-weight:600;color:var(--text-2)" id="skill-title">SKILL.md (current)</span>
+        <div style="flex:1"></div>
+        <select id="diff-v1" style="width:100px;font-size:10px"><option value="">Diff from...</option></select>
+        <select id="diff-v2" style="width:100px;font-size:10px"><option value="">Diff to...</option></select>
+        <button class="btn btn-s" onclick="loadDiff()" style="font-size:10px;padding:5px 10px">Show Diff</button>
+        <button class="btn btn-s" onclick="loadCurrentSkill()">Reload</button>
+        <button class="btn btn-p" id="btn-save-skill" onclick="saveSkill()">Save</button>
+      </div>
+      <div id="diff-panel" style="display:none"></div>
+      <textarea id="skill-text" spellcheck="false"></textarea>
+    </div>
+  </div>
+</section>
+
+<!-- ──── Config ──────────────────────────────────────── -->
+<section id="p-settings" class="panel">
+  <div class="settings-grid">
+    <div class="card">
+      <div class="card-h">Data</div>
+      <div class="sfld"><label>Patient Data Path</label><input type="text" id="cfg-data" value="data/oncoagent.parquet"></div>
+      <div class="sfld"><label>Model Directory</label><input type="text" id="cfg-mdir" value="data/models"></div>
+      <div class="sfld"><label>Skill File</label><input type="text" id="cfg-skill" value="skills/clinical_agent_builder.md"></div>
+    </div>
+    <div class="card">
+      <div class="card-h">Run Parameters</div>
+      <div class="sfld"><label>Max Iterations</label><input type="number" id="cfg-iters" value="15" min="1"></div>
+      <div class="sfld"><label>Sandbox Size</label><input type="number" id="cfg-sandbox" value="150" min="5"></div>
+      <div class="sfld"><label>Random Seed</label><input type="number" id="cfg-seed" value="42" min="0"></div>
+      <div class="sfld"><label>Max Concurrent</label><input type="number" id="cfg-conc" value="2" min="1" max="20"></div>
+      <button class="btn btn-p" onclick="saveSettings()" style="margin-top:6px">Save Settings</button>
+    </div>
+    <div class="card" style="grid-column: 1 / -1">
+      <div class="card-h">Prerequisites</div>
+      <button class="btn btn-s" onclick="checkPrereqs()" style="margin-bottom:8px">Run Check</button>
+      <div id="prereq-list"></div>
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════ */
+/* ── State                                                  */
+/* ══════════════════════════════════════════════════════════ */
+const S = {
+  status: 'idle', iterations: [], logs: [], bestAuc: 0, bestIter: -1,
+  curIter: -1, totalIters: 15, ws: null, wsOk: false,
+  analyses: {}, skillUpdates: {}, agentSpecs: {}, stepStatus: {},
+  allTraces: [], curTraces: [],
+};
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── WebSocket                                              */
+/* ══════════════════════════════════════════════════════════ */
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { S.ws = ws; S.wsOk = true; updWS(); };
+  ws.onclose = () => { S.wsOk = false; updWS(); setTimeout(connectWS, 3000); };
+  ws.onerror = () => { S.wsOk = false; updWS(); };
+  ws.onmessage = e => { try { handleEvent(JSON.parse(e.data)); } catch(err) { console.error(err); } };
+}
+function updWS() {
+  const d = document.getElementById('ws-dot');
+  const l = document.getElementById('ws-label');
+  d.classList.toggle('ok', S.wsOk);
+  l.textContent = S.wsOk ? 'Connected' : 'Disconnected';
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Event Handler                                          */
+/* ══════════════════════════════════════════════════════════ */
+function handleEvent(msg) {
+  const {type, data} = msg;
+  switch(type) {
+    case 'state_sync':
+      S.status = data.status;
+      S.iterations = data.iterations || [];
+      S.logs = data.logs || [];
+      S.bestAuc = data.best_auc || 0;
+      S.bestIter = data.best_iter ?? -1;
+      S.curIter = data.current_iteration ?? -1;
+      S.totalIters = data.total_iterations || 15;
+      S.analyses = data.analyses || {};
+      S.skillUpdates = data.skill_updates || {};
+      S.agentSpecs = data.agent_specs || {};
+      S.stepStatus = data.step_status || {};
+      renderAll();
+      break;
+    case 'run_started':
+      S.status = 'running'; S.iterations = []; S.logs = [];
+      S.curIter = -1; S.totalIters = data.max_iterations || 15;
+      S.analyses = {}; S.skillUpdates = {}; S.agentSpecs = {}; S.stepStatus = {};
+      renderStatus(); renderControls();
+      break;
+    case 'log':
+      S.logs.push(data); appendLog(data);
+      break;
+    case 'iteration_start':
+      S.curIter = data.iteration;
+      S.agentSpecs[data.iteration] = {topology: data.topology, agents: data.agents, rationale: data.rationale};
+      S.stepStatus[data.iteration] = {build:'done', run:'active', eval:'pending', analyze:'pending', update:'pending'};
+      renderMetrics(); renderStepper(); renderProgress();
+      break;
+    case 'case_progress':
+      renderProgress(data.completed, data.total, data.iteration);
+      break;
+    case 'iteration_complete':
+      S.iterations.push(data);
+      if (data.best_auc > S.bestAuc) { S.bestAuc = data.best_auc; S.bestIter = data.best_iter; }
+      const it1 = data.iteration;
+      if (S.stepStatus[it1]) { S.stepStatus[it1].run = 'done'; S.stepStatus[it1].eval = 'done'; S.stepStatus[it1].analyze = 'active'; }
+      renderMetrics(); renderCharts(); renderIterTable(); renderSelects(); renderStepper();
+      break;
+    case 'analysis_start':
+      if (S.stepStatus[data.iteration]) S.stepStatus[data.iteration].analyze = 'active';
+      renderStepper();
+      break;
+    case 'analysis_complete':
+      S.analyses[data.iteration] = {findings: data.findings||[], evidence_classes: data.evidence_classes||[]};
+      if (S.stepStatus[data.iteration]) { S.stepStatus[data.iteration].analyze = 'done'; S.stepStatus[data.iteration].update = 'active'; }
+      renderStepper();
+      break;
+    case 'skill_update':
+      S.skillUpdates[data.iteration] = data.diff_log || [];
+      if (S.stepStatus[data.iteration]) S.stepStatus[data.iteration].update = 'done';
+      renderStepper();
+      break;
+    case 'converged':
+      S.status = 'completed'; renderStatus(); renderControls(); break;
+    case 'run_complete':
+      S.status = 'completed'; S.bestAuc = data.best_auc || S.bestAuc; S.bestIter = data.best_iter ?? S.bestIter;
+      renderAll(); break;
+    case 'run_stopped':
+      S.status = 'stopped'; renderStatus(); renderControls(); break;
+    case 'run_error':
+      S.status = 'error'; renderStatus(); renderControls(); break;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── API                                                    */
+/* ══════════════════════════════════════════════════════════ */
+async function api(method, path, body) {
+  const opts = {method, headers: {'Content-Type':'application/json'}};
+  if (body) opts.body = JSON.stringify(body);
+  return (await fetch(`/api${path}`, opts)).json();
+}
+async function startRun() {
+  const cfg = {
+    max_iterations: +$('ctrl-iters').value, sandbox_n: +$('ctrl-sandbox').value,
+    model: $('ctrl-model').value, random_seed: +$('ctrl-seed').value,
+    data_path: $('cfg-data')?.value || 'data/oncoagent.parquet',
+    model_dir: $('cfg-mdir')?.value || 'data/models',
+    skill_path: $('cfg-skill')?.value || 'skills/clinical_agent_builder.md',
+  };
+  S.totalIters = cfg.max_iterations;
+  await api('POST', '/run/start', cfg);
+}
+async function stopRun() { await api('POST', '/run/stop'); }
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Render                                                 */
+/* ══════════════════════════════════════════════════════════ */
+function renderAll() { renderStatus(); renderMetrics(); renderControls(); renderCharts(); renderIterTable(); renderLogs(); renderSelects(); renderStepper(); }
+const $ = id => document.getElementById(id);
+
+function renderStatus() {
+  const b = $('status-badge'); b.className = `badge ${S.status}`;
+  $('status-text').textContent = S.status[0].toUpperCase() + S.status.slice(1);
+  $('d-status').textContent = S.status[0].toUpperCase() + S.status.slice(1);
+  const sub = {idle:'Ready to start', running:'Processing...', completed:'All iterations done', stopped:'Stopped by user', error:'See logs'};
+  $('d-status-sub').textContent = sub[S.status] || '';
+}
+
+function renderMetrics() {
+  if (S.curIter >= 0) { $('d-iter').textContent = S.curIter; $('d-iter-sub').textContent = `of ${S.totalIters}`; }
+  else if (S.iterations.length) { $('d-iter').textContent = S.iterations.length; $('d-iter-sub').textContent = `of ${S.totalIters} completed`; }
+  if (S.bestAuc > 0) { $('d-auc').textContent = S.bestAuc.toFixed(4); $('d-auc-sub').textContent = `at iter ${S.bestIter}`; }
+  // Best AUPRC
+  let bestAuprc = 0, bestAuprcIter = -1;
+  S.iterations.forEach(it => { const v = it.metrics?.auprc||0; if(v>bestAuprc){bestAuprc=v; bestAuprcIter=it.iteration;} });
+  if (bestAuprc > 0) { $('d-auprc').textContent = bestAuprc.toFixed(4); $('d-auprc-sub').textContent = `at iter ${bestAuprcIter}`; }
+  if (S.iterations.length) {
+    const last = S.iterations[S.iterations.length-1];
+    $('d-tokens').textContent = Math.round(last.metrics?.avg_tokens||0).toLocaleString();
+    $('d-tokens-sub').textContent = `iter ${last.iteration}`;
+    $('d-topo').innerHTML = `<span class="topo ${last.topology||''}">${last.topology||'--'}</span>`;
+    $('d-topo-sub').textContent = `${(last.agents||[]).length} agents`;
+  }
+}
+
+function renderControls() {
+  const r = S.status === 'running';
+  $('btn-start').disabled = r; $('btn-stop').disabled = !r;
+}
+
+function renderProgress(done, total, iter) {
+  if (done !== undefined && total) {
+    const p = ((S.curIter/S.totalIters)*100) + ((done/total)/S.totalIters*100);
+    $('pfill').style.width = Math.min(p,100)+'%';
+    $('plabel').textContent = `Iteration ${iter}: ${done}/${total} cases`;
+  } else if (S.status === 'completed') { $('pfill').style.width = '100%'; $('plabel').textContent = 'Complete'; }
+  else if (S.status === 'idle') { $('pfill').style.width = '0%'; $('plabel').innerHTML = '&nbsp;'; }
+}
+
+function renderStepper() {
+  const steps = $('stepper').querySelectorAll('.step');
+  const ss = S.stepStatus[S.curIter] || {};
+  steps.forEach(el => {
+    const k = el.dataset.step;
+    el.className = 'step';
+    if (ss[k] === 'done') el.classList.add('done');
+    else if (ss[k] === 'active') el.classList.add('active');
+  });
+}
+
+/* ── Charts ───────────────────────────────────────────── */
+let chAuc = null, chEff = null;
+const chartOpts = (min,max) => ({responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:'#636b7e',font:{family:'Inter',size:11}}}}, scales:{x:{ticks:{color:'#636b7e',font:{size:10}},grid:{color:'rgba(30,38,54,.5)'}},y:{min,max,ticks:{color:'#636b7e',font:{size:10}},grid:{color:'rgba(30,38,54,.5)'}}}});
+
+function renderCharts() {
+  const its = S.iterations, labs = its.map(i=>`Iter ${i.iteration}`);
+  const aucs = its.map(i=>i.metrics?.auc||0), auprcs = its.map(i=>i.metrics?.auprc||0);
+  const toks = its.map(i=>i.metrics?.avg_tokens||0), ccs = its.map(i=>i.metrics?.ccs||0);
+  if(chAuc) chAuc.destroy();
+  chAuc = new Chart($('ch-auc').getContext('2d'), {type:'line', data:{labels:labs, datasets:[
+    {label:'AUC', data:aucs, borderColor:'#818cf8', backgroundColor:'rgba(129,140,248,.08)', fill:true, tension:.3, pointRadius:4, pointBackgroundColor:'#818cf8'},
+    {label:'AUPRC', data:auprcs, borderColor:'#22d3ee', backgroundColor:'rgba(34,211,238,.08)', fill:true, tension:.3, pointRadius:4, pointBackgroundColor:'#22d3ee'},
+  ]}, options:chartOpts(0,1)});
+  if(chEff) chEff.destroy();
+  chEff = new Chart($('ch-eff').getContext('2d'), {type:'bar', data:{labels:labs, datasets:[
+    {label:'Tokens/Case', data:toks, backgroundColor:'rgba(129,140,248,.25)', borderColor:'#818cf8', borderWidth:1, yAxisID:'y'},
+    {label:'CCS', data:ccs, type:'line', borderColor:'#fbbf24', backgroundColor:'transparent', tension:.3, pointRadius:4, pointBackgroundColor:'#fbbf24', yAxisID:'y1'},
+  ]}, options:{...chartOpts(0,undefined), scales:{
+    x:{ticks:{color:'#636b7e',font:{size:10}},grid:{color:'rgba(30,38,54,.5)'}},
+    y:{position:'left',ticks:{color:'#636b7e',font:{size:10}},grid:{color:'rgba(30,38,54,.5)'},title:{display:true,text:'Tokens',color:'#636b7e'}},
+    y1:{position:'right',min:0,max:1,ticks:{color:'#636b7e',font:{size:10}},grid:{drawOnChartArea:false},title:{display:true,text:'CCS',color:'#636b7e'}}
+  }}});
+}
+
+/* ── Iteration Table ──────────────────────────────────── */
+function renderIterTable() {
+  const tb = $('iter-tbody');
+  const cnt = $('iter-cnt');
+  if (!S.iterations.length) { tb.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-3);padding:40px">No iterations yet</td></tr>'; cnt.style.display='none'; return; }
+  cnt.textContent = S.iterations.length; cnt.style.display = '';
+  let bestA=0, bestI=-1;
+  S.iterations.forEach((it,i)=>{const a=it.metrics?.auc||0; if(a>bestA){bestA=a;bestI=i;}});
+  tb.innerHTML = '';
+  S.iterations.forEach((it,idx) => {
+    const m = it.metrics||{}, best = idx===bestI, t = it.topology||'?';
+    const tr = document.createElement('tr');
+    tr.className = best?'best':''; tr.style.cursor = 'pointer';
+    tr.onclick = () => toggleExpand(it.iteration);
+    tr.innerHTML = `
+      <td>${best?'<span style="color:var(--amber)">&#9733;</span> ':''}${it.iteration}</td>
+      <td><span class="topo ${t}">${t}</span></td>
+      <td style="font-size:10px;font-family:var(--sans);color:var(--text-2)">${(it.agents||[]).join(' &#x2192; ')}</td>
+      <td style="color:${best?'var(--green)':'var(--text)'}">${(m.auc||0).toFixed(4)}</td>
+      <td>${(m.auprc||0).toFixed(4)}</td><td>${(m.brier||0).toFixed(4)}</td>
+      <td>${(m.ccs||0).toFixed(3)}</td><td>${Math.round(m.avg_tokens||0).toLocaleString()}</td>
+      <td>${(m.accuracy||0).toFixed(3)} <span style="color:var(--text-3)">(${m.correct_cases||0}/${m.total_cases||0})</span></td>
+      <td style="font-size:14px;color:var(--text-3)">&#x25BE;</td>`;
+    tb.appendChild(tr);
+    // Expandable detail
+    const exp = document.createElement('tr');
+    exp.className = 'iter-expand'; exp.id = `exp-${it.iteration}`;
+    exp.innerHTML = `<td colspan="10"><div class="iter-detail" id="detail-${it.iteration}"></div></td>`;
+    tb.appendChild(exp);
+  });
+}
+
+function toggleExpand(iter) {
+  const el = $(`exp-${iter}`);
+  if (!el) return;
+  const wasOpen = el.classList.contains('open');
+  document.querySelectorAll('.iter-expand.open').forEach(e => e.classList.remove('open'));
+  if (!wasOpen) { el.classList.add('open'); renderIterDetail(iter); }
+}
+
+async function renderIterDetail(iter) {
+  const box = $(`detail-${iter}`);
+  const it = S.iterations.find(i => i.iteration === iter);
+  if (!it) return;
+  const m = it.metrics || {};
+  const spec = S.agentSpecs[iter] || {};
+  const analysis = S.analyses[iter] || {};
+  const updates = S.skillUpdates[iter] || [];
+
+  // Fetch traces summary for this iteration
+  let traceSummary = [];
+  try { traceSummary = await api('GET', `/traces/${iter}`); } catch(e) {}
+
+  box.innerHTML = `
+    <div class="detail-tabs">
+      <div class="dtab active" onclick="switchDtab(this,'dt-spec-${iter}')">Agent Spec</div>
+      <div class="dtab" onclick="switchDtab(this,'dt-metrics-${iter}')">Metrics</div>
+      <div class="dtab" onclick="switchDtab(this,'dt-cases-${iter}')">Cases (${traceSummary.length})</div>
+      <div class="dtab" onclick="switchDtab(this,'dt-analysis-${iter}')">Analysis (${(analysis.findings||[]).length})</div>
+      <div class="dtab" onclick="switchDtab(this,'dt-updates-${iter}')">Skill Updates (${updates.length})</div>
+    </div>
+
+    <!-- Agent Spec -->
+    <div class="dpanel active" id="dt-spec-${iter}">
+      <div style="margin-bottom:10px">
+        <span class="topo ${spec.topology||''}">${spec.topology||'?'}</span>
+        <span style="font-size:11px;color:var(--text-2);margin-left:8px">${(spec.agents||[]).length} agents</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-2);margin-bottom:12px;line-height:1.6">${esc(spec.rationale||'N/A')}</div>
+      <div class="spec-agents">${renderSpecAgents(iter)}</div>
+    </div>
+
+    <!-- Metrics -->
+    <div class="dpanel" id="dt-metrics-${iter}">
+      <div class="grid g4" style="margin-bottom:12px">
+        <div class="mc"><div class="mc-label">AUC</div><div class="mc-val" style="font-size:20px;color:var(--green)">${(m.auc||0).toFixed(4)}</div></div>
+        <div class="mc"><div class="mc-label">AUPRC</div><div class="mc-val" style="font-size:20px;color:var(--cyan)">${(m.auprc||0).toFixed(4)}</div></div>
+        <div class="mc"><div class="mc-label">Brier Score</div><div class="mc-val" style="font-size:20px">${(m.brier||0).toFixed(4)}</div></div>
+        <div class="mc"><div class="mc-label">CCS</div><div class="mc-val" style="font-size:20px;color:var(--amber)">${(m.ccs||0).toFixed(3)}</div></div>
+      </div>
+      <div class="grid g4">
+        <div class="mc"><div class="mc-label">Accuracy</div><div class="mc-val" style="font-size:18px">${(m.accuracy||0).toFixed(4)}</div><div class="mc-sub">${m.correct_cases||0}/${m.total_cases||0}</div></div>
+        <div class="mc"><div class="mc-label">Sensitivity</div><div class="mc-val" style="font-size:18px">${(m.sensitivity||0).toFixed(4)}</div></div>
+        <div class="mc"><div class="mc-label">Specificity</div><div class="mc-val" style="font-size:18px">${(m.specificity||0).toFixed(4)}</div></div>
+        <div class="mc"><div class="mc-label">Total Tokens</div><div class="mc-val" style="font-size:18px">${(m.total_tokens||0).toLocaleString()}</div><div class="mc-sub">avg ${Math.round(m.avg_tokens||0)}/case</div></div>
+      </div>
+      ${m.subgroup_auc ? `<div class="card" style="margin-top:12px"><div class="card-h">Subgroup AUC</div><pre style="font-family:var(--mono);font-size:11px;color:var(--text-2)">${Object.entries(m.subgroup_auc).map(([k,v])=>`${k}: ${v!==null?v.toFixed(4):'N/A (insufficient)'}`).join('\n')}</pre></div>` : ''}
+    </div>
+
+    <!-- Cases -->
+    <div class="dpanel" id="dt-cases-${iter}">
+      ${traceSummary.length ? renderCasesTable(traceSummary) : '<div style="color:var(--text-3);padding:20px">No trace data</div>'}
+    </div>
+
+    <!-- Analysis -->
+    <div class="dpanel" id="dt-analysis-${iter}">
+      ${(analysis.findings||[]).length ? (analysis.findings||[]).map(f => `
+        <div class="finding">
+          <div class="finding-head">
+            <span class="ec ec-${f.evidence_class||'?'}">${f.evidence_class||'?'}</span>
+            <span style="font-size:10px;color:var(--text-3)">${f.target_section||''}</span>
+          </div>
+          <div class="finding-desc">${esc(f.description||'')}</div>
+        </div>
+      `).join('') : '<div style="color:var(--text-3);padding:20px">No analysis data</div>'}
+    </div>
+
+    <!-- Skill Updates -->
+    <div class="dpanel" id="dt-updates-${iter}">
+      ${updates.length ? updates.map(u => `
+        <div class="finding">
+          <div class="finding-head">
+            <span style="font-size:10px;font-weight:700;color:var(--cyan);font-family:var(--mono)">${esc(u.operation||'?')} &#x2192; ${esc(u.target_section||'?')}</span>
+          </div>
+          <div class="finding-desc">${esc(u.finding||'')}</div>
+          ${u.diff ? `<div class="diff-box" style="margin-top:6px">${renderDiffHtml(u.diff)}</div>` : ''}
+        </div>
+      `).join('') : '<div style="color:var(--text-3);padding:20px">No updates</div>'}
+    </div>
+  `;
+}
+
+function renderSpecAgents(iter) {
+  // Try to get agent details from the iteration data
+  const it = S.iterations.find(i => i.iteration === iter);
+  const agents = S.agentSpecs[iter]?.agents || it?.agents || [];
+  return agents.map(a => {
+    if (typeof a === 'string') {
+      return `<div class="spec-agent"><div class="spec-agent-name">${esc(a)}</div></div>`;
+    }
+    return `<div class="spec-agent">
+      <div class="spec-agent-name">${esc(a.agent_id || a.name || '?')}</div>
+      <div class="spec-agent-role">${esc(a.role || '')}</div>
+      ${a.tools ? `<div class="spec-agent-tools">${a.tools.map(t=>`<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderCasesTable(traces) {
+  let html = '<table class="tbl"><thead><tr><th>Patient</th><th>Risk Score</th><th>Predicted</th><th>Ground Truth</th><th>Correct</th><th>Agents</th><th>Tokens</th><th>Time</th></tr></thead><tbody>';
+  traces.forEach(t => {
+    const m = t.meta||{}, p = t.final_prediction||{};
+    const ok = p.correct;
+    html += `<tr>
+      <td>${esc(m.patient_id||'?')}</td>
+      <td>${(p.risk_score??0).toFixed(4)}</td>
+      <td>${p.label??'?'}</td>
+      <td>${m.ground_truth??'?'}</td>
+      <td style="color:${ok?'var(--green)':'var(--red)'}">${ok?'Yes':'No'}</td>
+      <td style="font-size:10px;font-family:var(--sans)">${(m.agents||[]).join(', ')}</td>
+      <td>${(m.total_tokens||0).toLocaleString()}</td>
+      <td>${(m.wall_time_ms||0).toFixed(0)}ms</td>
+    </tr>`;
+  });
+  return html + '</tbody></table>';
+}
+
+function switchDtab(el, panelId) {
+  const parent = el.closest('.iter-detail');
+  parent.querySelectorAll('.dtab').forEach(t => t.classList.remove('active'));
+  parent.querySelectorAll('.dpanel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+}
+
+/* ── Logs ──────────────────────────────────────────────── */
+function renderLogs() {
+  const box = $('log-box');
+  if (!S.logs.length) { box.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-3)">Waiting for events...</div>'; return; }
+  box.innerHTML = '';
+  S.logs.forEach(l => appendLog(l, false));
+  box.scrollTop = box.scrollHeight;
+}
+function appendLog(entry, scroll=true) {
+  const box = $('log-box');
+  if (box.querySelector('div[style]')) box.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = `log-e ${entry.level||'info'}`;
+  const ts = entry.ts ? new Date(entry.ts*1000).toLocaleTimeString() : '';
+  d.innerHTML = `<span class="ts">${ts}</span><span class="msg">${esc(entry.message||'')}</span>`;
+  box.appendChild(d);
+  if (scroll) box.scrollTop = box.scrollHeight;
+  while (box.children.length > 500) box.removeChild(box.firstChild);
+}
+
+/* ── Selects ───────────────────────────────────────────── */
+function renderSelects() {
+  [['tr-iter-sel','Select iteration...'], ['an-iter-sel','Select iteration...']].forEach(([id,ph]) => {
+    const sel = $(id); const cur = sel.value;
+    sel.innerHTML = `<option value="">${ph}</option>`;
+    S.iterations.forEach(it => {
+      const o = document.createElement('option');
+      o.value = it.iteration; o.textContent = `Iter ${it.iteration} (${it.topology})`;
+      sel.appendChild(o);
+    });
+    if (cur) sel.value = cur;
+  });
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Traces                                                 */
+/* ══════════════════════════════════════════════════════════ */
+async function loadTraces() {
+  const iter = +$('tr-iter-sel').value; if (isNaN(iter)) return;
+  S.allTraces = await api('GET', `/traces/${iter}`);
+  S.curTraces = S.allTraces;
+  $('tr-stats').textContent = `${S.allTraces.length} cases, ${S.allTraces.filter(t=>t.final_prediction?.correct).length} correct`;
+  renderTraceList();
+}
+function filterTraces() {
+  const q = $('tr-search').value.toLowerCase();
+  S.curTraces = q ? S.allTraces.filter(t=>(t.meta?.patient_id||'').toLowerCase().includes(q)) : S.allTraces;
+  renderTraceList();
+}
+function renderTraceList() {
+  const list = $('tr-list'); list.innerHTML = '';
+  S.curTraces.forEach((t,i) => {
+    const pid = t.meta?.patient_id||`case_${i}`, ok = t.final_prediction?.correct;
+    const score = t.final_prediction?.risk_score;
+    const d = document.createElement('div');
+    d.className = 'trace-item'; d.onclick = () => renderTrace(t, d);
+    d.innerHTML = `<div class="outcome ${ok?'correct':'wrong'}"></div><span>${pid}</span>${score!==undefined?`<span class="score">${score.toFixed(3)}</span>`:''}`;
+    list.appendChild(d);
+  });
+}
+function renderTrace(trace, el) {
+  document.querySelectorAll('.trace-item.active').forEach(e => e.classList.remove('active'));
+  if (el) el.classList.add('active');
+  const v = $('tr-view');
+  const m = trace.meta||{}, pred = trace.final_prediction||{};
+
+  // Patient meta header
+  let html = `<div style="margin-bottom:14px">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px">${esc(m.patient_id||'?')}</div>
+    <div style="font-size:11px;color:var(--text-3)">
+      Topology: <span class="topo ${m.topology||''}">${m.topology||'?'}</span>
+      &nbsp; Agents: ${(m.agents||[]).join(' &#x2192; ')}
+      &nbsp; Tokens: ${(m.total_tokens||0).toLocaleString()}
+      &nbsp; Time: ${(m.wall_time_ms||0).toFixed(0)}ms
+    </div>
+  </div>`;
+
+  // Agent traces
+  (trace.agent_traces||[]).forEach((at, idx) => {
+    const open = idx === trace.agent_traces.length - 1 ? 'open' : '';
+    html += `<div class="at-block ${open}">
+      <div class="at-head" onclick="this.parentElement.classList.toggle('open')">
+        <span class="at-agent">${esc(at.agent_id||'agent')}</span>
+        <span style="font-size:10px;color:var(--text-3)">turn ${at.turn||1}</span>
+        <span style="font-size:10px;color:var(--text-3)">${at.stop_reason||''}</span>
+        <span class="at-meta">${at.token_count||0} tok</span>
+      </div>
+      <div class="at-body">
+        ${at.reasoning ? `<div class="at-reason">${esc(at.reasoning)}</div>` : ''}
+        ${(at.tool_calls||[]).map((tc, ti) => `
+          <div class="tc-block${ti===0?' open':''}">
+            <div class="tc-head" onclick="this.parentElement.classList.toggle('open')">
+              <span>&#x1F527;</span> ${esc(tc.name||'?')}
+            </div>
+            <div class="tc-body">
+              <div class="tc-io"><div class="tc-io-label">Input</div><pre>${esc(JSON.stringify(tc.input||{},null,2))}</pre></div>
+              <div class="tc-io"><div class="tc-io-label">Output</div><pre>${esc(JSON.stringify(tc.output||{},null,2))}</pre></div>
+            </div>
+          </div>
+        `).join('')}
+        ${at.output ? `<div style="margin-top:8px"><div style="font-size:9px;font-weight:700;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Agent Output</div><pre style="font-family:var(--mono);font-size:10px;color:var(--text-2);white-space:pre-wrap">${esc(JSON.stringify(at.output,null,2))}</pre></div>` : ''}
+      </div>
+    </div>`;
+  });
+
+  // Final prediction
+  html += `<div class="pred-box">
+    <h4>Final Prediction</h4>
+    <div class="pred-grid">
+      <div class="pred-item"><div class="k">Risk Score</div><div class="v">${(pred.risk_score??0).toFixed(4)}</div></div>
+      <div class="pred-item"><div class="k">Predicted</div><div class="v">${pred.label??'?'}</div></div>
+      <div class="pred-item"><div class="k">Ground Truth</div><div class="v">${m.ground_truth??'?'}</div></div>
+      <div class="pred-item"><div class="k">Correct</div><div class="v ${pred.correct?'ok':'fail'}">${pred.correct?'YES':'NO'}</div></div>
+    </div>
+    ${pred.reasoning_summary ? `<div style="margin-top:10px;font-size:11px;color:var(--text-2);line-height:1.5">${esc(pred.reasoning_summary)}</div>` : ''}
+  </div>`;
+
+  v.innerHTML = html;
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Analysis                                               */
+/* ══════════════════════════════════════════════════════════ */
+let chEc = null;
+async function loadAnalysis() {
+  const iter = +$('an-iter-sel').value;
+  if (isNaN(iter)) return;
+  const analysis = S.analyses[iter] || await api('GET', `/iterations/${iter}/analysis`);
+  const updates = S.skillUpdates[iter] || await api('GET', `/iterations/${iter}/updates`);
+
+  // EC summary
+  const ecCounts = {};
+  (analysis.evidence_classes||[]).forEach(ec => { ecCounts[ec] = (ecCounts[ec]||0) + 1; });
+  $('an-ec-summary').innerHTML = Object.entries(ecCounts).map(([ec,n]) =>
+    `<div class="ec-count ec-${ec}" style="background:var(--bg-2);border:1px solid var(--border)">${ec}: ${n}</div>`
+  ).join('');
+
+  // EC chart
+  if(chEc) chEc.destroy();
+  const ecLabels = Object.keys(ecCounts);
+  const ecColors = {EC1:'#f87171',EC2:'#fbbf24',EC3:'#22d3ee',EC4:'#c084fc',EC5:'#34d399'};
+  chEc = new Chart($('ch-ec').getContext('2d'), {type:'doughnut', data:{
+    labels: ecLabels,
+    datasets: [{data: Object.values(ecCounts), backgroundColor: ecLabels.map(e=>ecColors[e]||'#636b7e'), borderWidth:0}]
+  }, options:{responsive:true,maintainAspectRatio:false, plugins:{legend:{position:'right',labels:{color:'#9ca3b4',font:{size:11}}}}}});
+
+  // Findings
+  $('an-findings').innerHTML = (analysis.findings||[]).length
+    ? (analysis.findings||[]).map(f => `
+      <div class="finding">
+        <div class="finding-head">
+          <span class="ec ec-${f.evidence_class||'?'}">${f.evidence_class||'?'}</span>
+          <span style="font-size:10px;color:var(--text-3)">${esc(f.target_section||'')}</span>
+        </div>
+        <div class="finding-desc">${esc(f.description||'')}</div>
+        ${f.sample_trace ? `<div style="margin-top:4px;font-size:10px;font-family:var(--mono);color:var(--text-3)">Trace: ${esc(f.sample_trace)}</div>` : ''}
+      </div>
+    `).join('')
+    : '<div style="color:var(--text-3);padding:20px;text-align:center">No findings</div>';
+
+  // Diffs
+  $('an-diffs').innerHTML = updates.length
+    ? updates.map(u => `
+      <div class="finding">
+        <div class="finding-head">
+          <span style="font-size:10px;font-weight:700;color:var(--cyan);font-family:var(--mono)">${esc(u.operation||'')} &#x2192; ${esc(u.target_section||'')}</span>
+        </div>
+        <div class="finding-desc">${esc(u.finding||'')}</div>
+      </div>
+    `).join('')
+    : '<div style="color:var(--text-3);padding:20px;text-align:center">No updates</div>';
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Skill Lab                                              */
+/* ══════════════════════════════════════════════════════════ */
+async function loadCurrentSkill() {
+  const d = await api('GET', '/skill');
+  if (d.content) { $('skill-text').value = d.content; $('skill-title').textContent = 'SKILL.md (current)'; hlVer('Current'); }
+}
+async function loadSkillVersion(name) {
+  const d = await api('GET', `/skill/versions/${name}`);
+  if (d.content) { $('skill-text').value = d.content; $('skill-title').textContent = name; hlVer(name); }
+}
+async function saveSkill() {
+  await api('PUT', '/skill', {content: $('skill-text').value});
+  $('skill-title').textContent = 'SKILL.md (current) — Saved';
+  setTimeout(() => $('skill-title').textContent = 'SKILL.md (current)', 2000);
+}
+async function loadSkillVersions() {
+  const vers = await api('GET', '/skill/versions');
+  const c = $('ver-list');
+  c.innerHTML = '<div class="ver-item active" onclick="loadCurrentSkill()">Current</div>';
+  vers.forEach(v => {
+    const d = document.createElement('div');
+    d.className = 'ver-item';
+    d.innerHTML = `<span>${v.name}</span><span class="sz">${(v.size/1024).toFixed(1)}k</span>`;
+    d.onclick = () => loadSkillVersion(v.name);
+    c.appendChild(d);
+  });
+  // Populate diff selectors
+  ['diff-v1','diff-v2'].forEach(id => {
+    const sel = $(id);
+    sel.innerHTML = `<option value="">v...</option>`;
+    vers.forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name.replace('.md',''); sel.appendChild(o); });
+  });
+}
+function hlVer(name) { document.querySelectorAll('.ver-item').forEach(e => e.classList.toggle('active', e.textContent.includes(name))); }
+
+async function loadDiff() {
+  const v1 = $('diff-v1').value, v2 = $('diff-v2').value;
+  if (!v1 || !v2) return;
+  const d = await api('GET', `/skill/diff/${v1}/${v2}`);
+  const panel = $('diff-panel');
+  if (d.diff) {
+    panel.style.display = 'block';
+    panel.innerHTML = `<div class="diff-box">${renderDiffHtml(d.diff)}</div>`;
+  } else {
+    panel.style.display = 'block';
+    panel.innerHTML = '<div style="color:var(--text-3);padding:10px">No differences</div>';
+  }
+}
+
+function renderDiffHtml(diff) {
+  if (!diff) return '';
+  return diff.split('\n').map(line => {
+    if (line.startsWith('+++') || line.startsWith('---')) return `<div class="diff-hdr">${esc(line)}</div>`;
+    if (line.startsWith('@@')) return `<div class="diff-hdr">${esc(line)}</div>`;
+    if (line.startsWith('+')) return `<div class="diff-add">${esc(line)}</div>`;
+    if (line.startsWith('-')) return `<div class="diff-del">${esc(line)}</div>`;
+    return `<div class="diff-ctx">${esc(line)}</div>`;
+  }).join('');
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Settings                                               */
+/* ══════════════════════════════════════════════════════════ */
+async function saveSettings() {
+  await api('POST', '/config', {
+    data_path: $('cfg-data').value, model_dir: $('cfg-mdir').value,
+    skill_path: $('cfg-skill').value, max_iterations: +$('cfg-iters').value,
+    sandbox_n: +$('cfg-sandbox').value, random_seed: +$('cfg-seed').value,
+    max_concurrent: +$('cfg-conc').value,
+  });
+}
+async function loadConfig() {
+  const c = await api('GET', '/config');
+  if(c.data_path) $('cfg-data').value = c.data_path;
+  if(c.model_dir) $('cfg-mdir').value = c.model_dir;
+  if(c.skill_path) $('cfg-skill').value = c.skill_path;
+  if(c.max_iterations) $('cfg-iters').value = c.max_iterations;
+  if(c.sandbox_n) $('cfg-sandbox').value = c.sandbox_n;
+  if(c.random_seed!==undefined) $('cfg-seed').value = c.random_seed;
+  if(c.max_concurrent) $('cfg-conc').value = c.max_concurrent;
+}
+async function checkPrereqs() {
+  const d = await api('GET', '/prerequisites');
+  $('prereq-list').innerHTML = (d.checks||[]).map(c =>
+    `<div class="prereq"><span class="icon">${c.ok?'\u2705':'\u274C'}</span><span>${c.name}</span><span class="detail">${c.detail}</span></div>`
+  ).join('');
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Tab Switching                                          */
+/* ══════════════════════════════════════════════════════════ */
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(`p-${btn.dataset.tab}`).classList.add('active');
+    if (btn.dataset.tab === 'skill') { loadCurrentSkill(); loadSkillVersions(); }
+    if (btn.dataset.tab === 'settings') loadConfig();
+  });
+});
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Helpers                                                */
+/* ══════════════════════════════════════════════════════════ */
+function esc(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Init                                                   */
+/* ══════════════════════════════════════════════════════════ */
+async function init() {
+  connectWS();
+  renderCharts();
+  try {
+    const st = await api('GET', '/status');
+    S.status = st.status; S.bestAuc = st.best_auc||0; S.bestIter = st.best_iter??-1;
+    S.curIter = st.current_iteration??-1; S.totalIters = st.total_iterations||15;
+    S.iterations = await api('GET', '/iterations') || [];
+    S.logs = await api('GET', '/logs') || [];
+    renderAll();
+  } catch(e) { console.error('Init error:', e); }
+}
+init();
+</script>
+</body>
+</html>
