@@ -171,19 +171,50 @@ Include your rationale field explaining your design choices.
     response_text = response.content[0].text
     spec_dict = _extract_json_from_response(response_text)
 
-    # Parse and validate
+    # Validate topology
+    valid_topologies = {"single", "pipeline", "ensemble", "debate", "hierarchical", "dynamic"}
+    raw_topology = spec_dict.get("topology", "pipeline").lower().strip()
+    topology = raw_topology if raw_topology in valid_topologies else "pipeline"
+
+    # Parse and validate agents
     agents = []
     for agent_dict in spec_dict.get("agents", []):
+        # Ensure required fields have sane defaults
+        agent_id = agent_dict.get("agent_id", f"agent_{len(agents)}")
+        role = agent_dict.get("role", agent_id)
+        system_prompt = agent_dict.get("system_prompt", "")
+        raw_tools = agent_dict.get("tools") or []
+        if not isinstance(raw_tools, list):
+            raw_tools = []
+        max_tokens = agent_dict.get("max_tokens", 800)
+        if not isinstance(max_tokens, int) or max_tokens < 100:
+            max_tokens = 800
+
         agents.append(AgentConfig(
-            agent_id=agent_dict["agent_id"],
-            role=agent_dict["role"],
-            system_prompt=agent_dict["system_prompt"],
-            tools=agent_dict.get("tools", []),
-            max_tokens=agent_dict.get("max_tokens", 800)
+            agent_id=agent_id,
+            role=role,
+            system_prompt=system_prompt,
+            tools=raw_tools,
+            max_tokens=max_tokens
+        ))
+
+    # Ensure at least one agent exists
+    if not agents:
+        agents.append(AgentConfig(
+            agent_id="fallback_predictor",
+            role="Risk Predictor",
+            system_prompt=(
+                "You are a bone metastasis risk predictor. Use predict_risk "
+                "and get_patient_features tools. Output JSON with risk_score, "
+                "label, and reasoning."
+            ),
+            tools=["predict_risk", "get_patient_features",
+                   "compute_ops_trajectory", "lookup_drug_interaction"],
+            max_tokens=800
         ))
 
     spec = AgentSpec(
-        topology=spec_dict.get("topology", "pipeline"),
+        topology=topology,
         agents=agents,
         interface=spec_dict.get("interface", {}),
         rationale=spec_dict.get("rationale", ""),

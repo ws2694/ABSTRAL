@@ -98,6 +98,43 @@ ONCO_TOOLS = [
 ]
 
 
-def get_tools_for_agent(tool_names: list[str]) -> list[dict]:
-    """Return the subset of ONCO_TOOLS matching the given names."""
-    return [t for t in ONCO_TOOLS if t["name"] in tool_names]
+TOOL_NAME_ALIASES = {
+    "risk_prediction": "predict_risk",
+    "predict": "predict_risk",
+    "ml_predict": "predict_risk",
+    "risk_predict": "predict_risk",
+    "ops_trajectory": "compute_ops_trajectory",
+    "compute_ops": "compute_ops_trajectory",
+    "ops": "compute_ops_trajectory",
+    "drug_interaction": "lookup_drug_interaction",
+    "lookup_drug": "lookup_drug_interaction",
+    "drug_lookup": "lookup_drug_interaction",
+    "patient_features": "get_patient_features",
+    "get_features": "get_patient_features",
+    "features": "get_patient_features",
+}
+
+VALID_TOOL_NAMES = {t["name"] for t in ONCO_TOOLS}
+
+
+def get_tools_for_agent(tool_names) -> list[dict]:
+    """Return the subset of ONCO_TOOLS matching the given names.
+
+    Handles None input, empty lists, and common name aliases that
+    Claude may generate when compiling agent specs.
+    """
+    if not tool_names:
+        return ONCO_TOOLS  # default: give agent all tools
+
+    resolved = set()
+    for name in tool_names:
+        if not isinstance(name, str):
+            continue
+        canonical = TOOL_NAME_ALIASES.get(name.lower().strip(), name.lower().strip())
+        if canonical in VALID_TOOL_NAMES:
+            resolved.add(canonical)
+
+    if not resolved:
+        return ONCO_TOOLS  # fallback: all tools if none matched
+
+    return [t for t in ONCO_TOOLS if t["name"] in resolved]
