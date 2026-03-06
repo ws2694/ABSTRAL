@@ -85,7 +85,12 @@ def main():
     )
     parser.add_argument(
         "--claude-model", type=str, default="claude-sonnet-4-20250514",
-        help="Claude model to use for agents"
+        help="Claude model for meta-agent (compiler, analyzer, editor)"
+    )
+    parser.add_argument(
+        "--agent-model", type=str, default=None,
+        help="Model for agent execution (default: same as --claude-model). "
+             "Supports: claude-haiku-4-5-20251001, gpt-4o-mini, gemini-2.0-flash, etc."
     )
     parser.add_argument(
         "--max-concurrent", type=int, default=5,
@@ -111,6 +116,7 @@ def main():
         max_iterations=args.iters,
         sandbox_n=args.sandbox_n,
         model=args.claude_model,
+        agent_model=args.agent_model or args.claude_model,
         model_dir=args.model_dir,
         max_concurrent=args.max_concurrent,
         use_batch_api=args.batch,

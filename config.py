@@ -1,17 +1,21 @@
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_DATA_DIR = os.environ.get("DATA_DIR", "data")
 
 
 @dataclass
 class ABSTRALConfig:
-    data_path: str = "data/oncoagent_7315.parquet"
+    data_path: str = f"{_DATA_DIR}/oncoagent_7315.parquet"
     skill_path: str = "skills/clinical_agent_builder.md"
     task_description: str = "Predict bone metastasis within 2 years of lung cancer diagnosis"
     sandbox_n: int = 150
     max_iterations: int = 15
     max_agents: int = 5
-    model: str = "claude-sonnet-4-20250514"
-    model_dir: str = "data/models"
+    model: str = "claude-sonnet-4-20250514"       # meta-agent (compiler, analyzer, editor)
+    agent_model: str = "claude-sonnet-4-20250514"  # agent execution (can be haiku, gpt-4o-mini, etc.)
+    model_dir: str = f"{_DATA_DIR}/models"
     trace_dir: str = "traces"
     max_concurrent: int = 10
     use_batch_api: bool = False

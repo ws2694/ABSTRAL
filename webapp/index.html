@@ -257,9 +257,40 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 @media (max-width: 700px) {
   .g2, .g3, .g4, .g5, .g6 { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── Login Overlay ─────────────────────────────────────── */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg-0);
+  display: flex; align-items: center; justify-content: center;
+}
+.login-overlay.hidden { display: none; }
+.login-box {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 40px; width: 360px; text-align: center;
+}
+.login-box .logo-mark { width: 48px; height: 48px; font-size: 20px; border-radius: 12px; margin: 0 auto 12px; display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--purple)); color: #fff; font-weight: 900; }
+.login-box h2 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.login-box p { font-size: 12px; color: var(--text-3); margin-bottom: 20px; }
+.login-box input { width: 100%; padding: 10px 14px; font-size: 13px; margin-bottom: 12px; }
+.login-box .btn { width: 100%; padding: 10px; font-size: 13px; }
+.login-box .login-err { color: var(--red); font-size: 11px; margin-top: 8px; min-height: 16px; }
 </style>
 </head>
 <body>
+
+<!-- ═══ Login Overlay ═════════════════════════════════════ -->
+<div class="login-overlay" id="login-overlay">
+  <div class="login-box">
+    <div class="logo-mark">A</div>
+    <h2>ABSTRAL</h2>
+    <p>Enter the team password to continue</p>
+    <input type="password" id="login-pw" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn btn-p" onclick="doLogin()">Sign In</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
+
 <div class="app">
 
 <!-- ═══ Header ═══════════════════════════════════════════ -->
@@ -278,6 +309,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   <button class="tab" data-tab="traces">Trace Inspector</button>
   <button class="tab" data-tab="analysis">Analysis</button>
   <button class="tab" data-tab="skill">Skill Lab</button>
+  <button class="tab" data-tab="baselines">Baselines</button>
+  <button class="tab" data-tab="matrix">Model Matrix</button>
   <button class="tab" data-tab="settings">Config</button>
 </nav>
 
@@ -426,6 +459,89 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   </div>
 </section>
 
+<!-- ──── Baselines ──────────────────────────────────── -->
+<section id="p-baselines" class="panel">
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-h">Run Baseline Comparison</div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div class="fld"><label>Model</label><select id="bl-model">
+        <option value="claude-sonnet-4-20250514">claude-sonnet-4</option>
+        <option value="claude-haiku-4-5-20251001" selected>claude-haiku-4.5</option>
+        <option value="gpt-4o-mini">gpt-4o-mini</option>
+      </select></div>
+      <div class="fld"><label>Sandbox</label><input type="number" id="bl-sandbox" value="50" min="5" max="500" style="width:70px"></div>
+      <div class="fld"><label>Seed</label><input type="number" id="bl-seed" value="42" min="0" style="width:60px"></div>
+      <div class="fld"><label>Baselines</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="ml_only" class="bl-cb" checked> ML Only</label>
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="zero_shot" class="bl-cb" checked> Zero-Shot</label>
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="cot_only" class="bl-cb" checked> CoT Only</label>
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="hand_designed" class="bl-cb" checked> Hand-Designed</label>
+        </div>
+      </div>
+      <button class="btn btn-p" id="btn-bl-run" onclick="runBaselines()">Run Baselines</button>
+    </div>
+    <div id="bl-status-msg" style="font-size:11px;color:var(--text-3);margin-top:8px"></div>
+  </div>
+
+  <!-- Latest results -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-h">Baseline Results</div>
+    <div id="bl-results">
+      <div style="color:var(--text-3);text-align:center;padding:30px">No baseline results yet. Run baselines above or view saved runs below.</div>
+    </div>
+  </div>
+
+  <!-- Saved runs -->
+  <div class="card">
+    <div class="card-h">Saved Baseline Runs</div>
+    <div id="bl-saved-runs">
+      <div style="color:var(--text-3);text-align:center;padding:20px">Loading...</div>
+    </div>
+  </div>
+</section>
+
+<!-- ──── Model Matrix ──────────────────────────────── -->
+<section id="p-matrix" class="panel">
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-h">Run Topology Validation Matrix</div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div class="fld"><label>Source Spec</label><select id="mx-source" onchange="updateMatrixSource()">
+        <option value="">Select ABSTRAL run...</option>
+      </select></div>
+      <div class="fld"><label>Sandbox</label><input type="number" id="mx-sandbox" value="30" min="5" max="300" style="width:70px"></div>
+      <div class="fld"><label>Seed</label><input type="number" id="mx-seed" value="42" min="0" style="width:60px"></div>
+      <div class="fld"><label>Models</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="claude-haiku-4-5-20251001" class="mx-cb" checked> Haiku</label>
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="claude-sonnet-4-20250514" class="mx-cb" checked> Sonnet</label>
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="gpt-4o-mini" class="mx-cb"> GPT-4o-mini</label>
+          <label style="font-size:11px;display:flex;gap:3px;align-items:center"><input type="checkbox" value="gemini-2.0-flash" class="mx-cb"> Gemini Flash</label>
+        </div>
+      </div>
+      <button class="btn btn-p" id="btn-mx-run" onclick="runMatrix()">Run Matrix</button>
+    </div>
+    <div id="mx-source-info" style="font-size:11px;color:var(--text-3);margin-top:6px"></div>
+    <div id="mx-status-msg" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
+  </div>
+
+  <!-- Latest results -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="card-h">Matrix Results</div>
+    <div id="mx-results">
+      <div style="color:var(--text-3);text-align:center;padding:30px">No matrix results yet. Select a run spec and test models above.</div>
+    </div>
+  </div>
+
+  <!-- Saved runs -->
+  <div class="card">
+    <div class="card-h">Saved Matrix Runs</div>
+    <div id="mx-saved-runs">
+      <div style="color:var(--text-3);text-align:center;padding:20px">Loading...</div>
+    </div>
+  </div>
+</section>
+
 <!-- ──── Config ──────────────────────────────────────── -->
 <section id="p-settings" class="panel">
   <div class="settings-grid">
@@ -463,14 +579,69 @@ const S = {
   curIter: -1, totalIters: 15, ws: null, wsOk: false,
   analyses: {}, skillUpdates: {}, agentSpecs: {}, stepStatus: {},
   allTraces: [], curTraces: [],
+  authToken: localStorage.getItem('abstral_token') || '',
 };
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Auth                                                   */
+/* ══════════════════════════════════════════════════════════ */
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/auth/check');
+    const data = await res.json();
+    if (!data.auth_required) {
+      document.getElementById('login-overlay').classList.add('hidden');
+      return true;
+    }
+    // Auth required — check if we have a valid stored token
+    if (S.authToken) {
+      const r2 = await fetch('/api/status', {headers: {'Authorization': `Bearer ${S.authToken}`}});
+      if (r2.ok) {
+        document.getElementById('login-overlay').classList.add('hidden');
+        return true;
+      }
+    }
+    // Show login
+    document.getElementById('login-overlay').classList.remove('hidden');
+    document.getElementById('login-pw').focus();
+    return false;
+  } catch(e) {
+    // Server unreachable, hide login and try anyway
+    document.getElementById('login-overlay').classList.add('hidden');
+    return true;
+  }
+}
+
+async function doLogin() {
+  const pw = document.getElementById('login-pw').value;
+  const errEl = document.getElementById('login-err');
+  errEl.textContent = '';
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw}),
+    });
+    const data = await res.json();
+    if (res.ok && data.valid) {
+      S.authToken = data.token || '';
+      localStorage.setItem('abstral_token', S.authToken);
+      document.getElementById('login-overlay').classList.add('hidden');
+      init();
+    } else {
+      errEl.textContent = data.error || 'Invalid password';
+    }
+  } catch(e) {
+    errEl.textContent = 'Connection error';
+  }
+}
 
 /* ══════════════════════════════════════════════════════════ */
 /* ── WebSocket                                              */
 /* ══════════════════════════════════════════════════════════ */
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  const tokenParam = S.authToken ? `?token=${encodeURIComponent(S.authToken)}` : '';
+  const ws = new WebSocket(`${proto}://${location.host}/ws${tokenParam}`);
   ws.onopen = () => { S.ws = ws; S.wsOk = true; updWS(); };
   ws.onclose = () => { S.wsOk = false; updWS(); setTimeout(connectWS, 3000); };
   ws.onerror = () => { S.wsOk = false; updWS(); };
@@ -551,6 +722,14 @@ function handleEvent(msg) {
       S.status = 'stopped'; renderStatus(); renderControls(); break;
     case 'run_error':
       S.status = 'error'; renderStatus(); renderControls(); break;
+    case 'baseline_complete':
+      if (data.run_id) loadBaselineResult(data.run_id);
+      loadSavedBaselineRuns();
+      break;
+    case 'matrix_complete':
+      if (data.run_id) loadMatrixResult(data.run_id);
+      loadSavedMatrixRuns();
+      break;
   }
 }
 
@@ -558,7 +737,9 @@ function handleEvent(msg) {
 /* ── API                                                    */
 /* ══════════════════════════════════════════════════════════ */
 async function api(method, path, body) {
-  const opts = {method, headers: {'Content-Type':'application/json'}};
+  const headers = {'Content-Type':'application/json'};
+  if (S.authToken) headers['Authorization'] = `Bearer ${S.authToken}`;
+  const opts = {method, headers};
   if (body) opts.body = JSON.stringify(body);
   return (await fetch(`/api${path}`, opts)).json();
 }
@@ -1083,6 +1264,275 @@ async function checkPrereqs() {
 }
 
 /* ══════════════════════════════════════════════════════════ */
+/* ── Baselines                                              */
+/* ══════════════════════════════════════════════════════════ */
+async function runBaselines() {
+  const selected = [...document.querySelectorAll('.bl-cb:checked')].map(c => c.value);
+  if (!selected.length) { alert('Select at least one baseline'); return; }
+  $('btn-bl-run').disabled = true;
+  $('bl-status-msg').textContent = 'Running baselines... this may take several minutes.';
+  $('bl-status-msg').style.color = 'var(--amber)';
+  try {
+    await api('POST', '/baselines/run', {
+      model: $('bl-model').value,
+      sandbox_n: +$('bl-sandbox').value,
+      seed: +$('bl-seed').value,
+      baselines: selected,
+    });
+    pollBaselineStatus();
+  } catch(e) {
+    $('bl-status-msg').textContent = 'Error: ' + e.message;
+    $('bl-status-msg').style.color = 'var(--red)';
+    $('btn-bl-run').disabled = false;
+  }
+}
+
+async function pollBaselineStatus() {
+  const poll = async () => {
+    const st = await api('GET', '/baselines/status');
+    if (st.status === 'running') {
+      setTimeout(poll, 3000);
+    } else {
+      $('btn-bl-run').disabled = false;
+      if (st.status === 'completed') {
+        $('bl-status-msg').textContent = 'Baselines complete!';
+        $('bl-status-msg').style.color = 'var(--green)';
+        if (st.run_id) loadBaselineResult(st.run_id);
+        loadSavedBaselineRuns();
+      } else {
+        $('bl-status-msg').textContent = 'Error: ' + (st.error || 'unknown');
+        $('bl-status-msg').style.color = 'var(--red)';
+      }
+    }
+  };
+  poll();
+}
+
+async function loadBaselineResult(runId) {
+  const data = await api('GET', `/baselines/results/${runId}`);
+  if (!data || !data.results) return;
+  renderBaselineTable(data.results, data.config);
+}
+
+function renderBaselineTable(results, config) {
+  const el = $('bl-results');
+  if (!results || !Object.keys(results).length) {
+    el.innerHTML = '<div style="color:var(--text-3);text-align:center;padding:20px">No results</div>';
+    return;
+  }
+  let html = `<div style="font-size:10px;color:var(--text-3);margin-bottom:8px">Model: ${config?.model || '?'} | Sandbox: ${config?.sandbox_n || '?'} | Seed: ${config?.seed || '?'}</div>`;
+  html += '<table class="tbl"><thead><tr><th>Baseline</th><th>AUC</th><th>AUPRC</th><th>Accuracy</th><th>Brier</th><th>Tokens</th></tr></thead><tbody>';
+  let bestAuc = 0, bestName = '';
+  for (const [name, d] of Object.entries(results)) {
+    const auc = d.metrics?.auc || 0;
+    if (auc > bestAuc) { bestAuc = auc; bestName = name; }
+  }
+  for (const [name, d] of Object.entries(results)) {
+    const m = d.metrics || {};
+    const isBest = name === bestName;
+    html += `<tr${isBest ? ' class="best"' : ''}>
+      <td>${isBest ? '<span style="color:var(--amber)">&#9733;</span> ' : ''}${esc(name)}</td>
+      <td style="color:${isBest ? 'var(--green)' : 'var(--text)'}">${(m.auc||0).toFixed(4)}</td>
+      <td>${(m.auprc||0).toFixed(4)}</td>
+      <td>${(m.accuracy||0).toFixed(4)}</td>
+      <td>${(m.brier||0).toFixed(4)}</td>
+      <td>${(d.total_tokens||0).toLocaleString()}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function loadSavedBaselineRuns() {
+  const runs = await api('GET', '/baselines/results');
+  const el = $('bl-saved-runs');
+  if (!runs || !runs.length) {
+    el.innerHTML = '<div style="color:var(--text-3);text-align:center;padding:20px">No saved runs</div>';
+    return;
+  }
+  let html = '<table class="tbl"><thead><tr><th>ID</th><th>Date</th><th>Model</th><th>Sandbox</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  for (const r of runs) {
+    const date = new Date(r.created_at * 1000).toLocaleString();
+    html += `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${r.id}</td>
+      <td>${date}</td>
+      <td style="font-size:11px">${r.config?.model || '?'}</td>
+      <td>${r.config?.sandbox_n || '?'}</td>
+      <td><span class="badge ${r.status}"><span class="dot"></span>${r.status}</span></td>
+      <td>
+        <button class="btn btn-s" style="font-size:10px;padding:3px 8px" onclick="loadBaselineResult('${r.id}')">View</button>
+        <button class="btn btn-d" style="font-size:10px;padding:3px 8px" onclick="deleteBaselineRun('${r.id}')">Del</button>
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function deleteBaselineRun(id) {
+  if (!confirm('Delete this baseline run?')) return;
+  await api('DELETE', `/baselines/results/${id}`);
+  loadSavedBaselineRuns();
+}
+
+/* ══════════════════════════════════════════════════════════ */
+/* ── Model Matrix                                           */
+/* ══════════════════════════════════════════════════════════ */
+async function loadMatrixRunOptions() {
+  const runs = await api('GET', '/runs');
+  const sel = $('mx-source');
+  sel.innerHTML = '<option value="">Select ABSTRAL run...</option>';
+  if (runs && runs.length) {
+    for (const r of runs) {
+      if (r.best_auc > 0) {
+        const date = new Date(r.created_at * 1000).toLocaleDateString();
+        sel.innerHTML += `<option value="${r.id}">${r.name} (AUC: ${r.best_auc.toFixed(4)}, ${date})</option>`;
+      }
+    }
+  }
+}
+
+function updateMatrixSource() {
+  const id = $('mx-source').value;
+  $('mx-source-info').textContent = id ? `Will use best spec from run ${id}` : '';
+}
+
+async function runMatrix() {
+  const sourceId = $('mx-source').value;
+  if (!sourceId) { alert('Select a source ABSTRAL run'); return; }
+  const models = [...document.querySelectorAll('.mx-cb:checked')].map(c => c.value);
+  if (!models.length) { alert('Select at least one model'); return; }
+  $('btn-mx-run').disabled = true;
+  $('mx-status-msg').textContent = 'Running matrix... this may take several minutes.';
+  $('mx-status-msg').style.color = 'var(--amber)';
+  try {
+    await api('POST', '/matrix/run', {
+      source_run_id: sourceId,
+      models: models,
+      sandbox_n: +$('mx-sandbox').value,
+      seed: +$('mx-seed').value,
+    });
+    pollMatrixStatus();
+  } catch(e) {
+    $('mx-status-msg').textContent = 'Error: ' + e.message;
+    $('mx-status-msg').style.color = 'var(--red)';
+    $('btn-mx-run').disabled = false;
+  }
+}
+
+async function pollMatrixStatus() {
+  const poll = async () => {
+    const st = await api('GET', '/matrix/status');
+    if (st.status === 'running') {
+      setTimeout(poll, 3000);
+    } else {
+      $('btn-mx-run').disabled = false;
+      if (st.status === 'completed') {
+        $('mx-status-msg').textContent = 'Matrix complete!';
+        $('mx-status-msg').style.color = 'var(--green)';
+        if (st.run_id) loadMatrixResult(st.run_id);
+        loadSavedMatrixRuns();
+      } else {
+        $('mx-status-msg').textContent = 'Error: ' + (st.error || 'unknown');
+        $('mx-status-msg').style.color = 'var(--red)';
+      }
+    }
+  };
+  poll();
+}
+
+async function loadMatrixResult(runId) {
+  const data = await api('GET', `/matrix/results/${runId}`);
+  if (!data || !data.results) return;
+  renderMatrixTable(data.results, data.config);
+}
+
+function renderMatrixTable(results, config) {
+  const el = $('mx-results');
+  if (!results || !Object.keys(results).length) {
+    el.innerHTML = '<div style="color:var(--text-3);text-align:center;padding:20px">No results</div>';
+    return;
+  }
+  let html = `<div style="font-size:10px;color:var(--text-3);margin-bottom:8px">Topology: ${config?.topology || '?'} | Sandbox: ${config?.sandbox_n || '?'} | Seed: ${config?.seed || '?'}</div>`;
+  html += '<table class="tbl"><thead><tr><th>Model</th><th>AUC</th><th>AUPRC</th><th>Accuracy</th><th>Tokens</th></tr></thead><tbody>';
+  let bestAuc = 0, bestModel = '';
+  for (const [model, d] of Object.entries(results)) {
+    const auc = d.metrics?.auc || 0;
+    if (auc > bestAuc) { bestAuc = auc; bestModel = model; }
+  }
+  for (const [model, d] of Object.entries(results)) {
+    const m = d.metrics || {};
+    const isBest = model === bestModel;
+    html += `<tr${isBest ? ' class="best"' : ''}>
+      <td style="font-family:var(--mono);font-size:11px">${isBest ? '<span style="color:var(--amber)">&#9733;</span> ' : ''}${esc(model)}</td>
+      <td style="color:${isBest ? 'var(--green)' : 'var(--text)'}">${(m.auc||0).toFixed(4)}</td>
+      <td>${(m.auprc||0).toFixed(4)}</td>
+      <td>${(m.accuracy||0).toFixed(4)}</td>
+      <td>${(d.total_tokens||0).toLocaleString()}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+
+  // Add a bar chart for visual comparison
+  html += '<div style="margin-top:12px;height:200px"><canvas id="ch-matrix"></canvas></div>';
+  el.innerHTML = html;
+
+  // Render chart
+  const models = Object.keys(results);
+  const aucs = models.map(m => results[m].metrics?.auc || 0);
+  const auprcs = models.map(m => results[m].metrics?.auprc || 0);
+  const ctx = document.getElementById('ch-matrix');
+  if (ctx) {
+    new Chart(ctx.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: models.map(m => m.replace('claude-','').replace('-20250514','').replace('-20251001','')),
+        datasets: [
+          {label: 'AUC', data: aucs, backgroundColor: 'rgba(129,140,248,.5)', borderColor: '#818cf8', borderWidth: 1},
+          {label: 'AUPRC', data: auprcs, backgroundColor: 'rgba(34,211,238,.5)', borderColor: '#22d3ee', borderWidth: 1},
+        ]
+      },
+      options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{color:'#636b7e',font:{family:'Inter',size:11}}}},
+        scales:{x:{ticks:{color:'#636b7e',font:{size:10}},grid:{color:'rgba(30,38,54,.5)'}},
+                y:{min:0,max:1,ticks:{color:'#636b7e',font:{size:10}},grid:{color:'rgba(30,38,54,.5)'}}}}
+    });
+  }
+}
+
+async function loadSavedMatrixRuns() {
+  const runs = await api('GET', '/matrix/results');
+  const el = $('mx-saved-runs');
+  if (!runs || !runs.length) {
+    el.innerHTML = '<div style="color:var(--text-3);text-align:center;padding:20px">No saved runs</div>';
+    return;
+  }
+  let html = '<table class="tbl"><thead><tr><th>ID</th><th>Date</th><th>Topology</th><th>Models</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+  for (const r of runs) {
+    const date = new Date(r.created_at * 1000).toLocaleString();
+    const nModels = r.config?.models?.length || '?';
+    html += `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${r.id}</td>
+      <td>${date}</td>
+      <td><span class="topo ${r.config?.topology||''}">${r.config?.topology || '?'}</span></td>
+      <td>${nModels} models</td>
+      <td><span class="badge ${r.status}"><span class="dot"></span>${r.status}</span></td>
+      <td>
+        <button class="btn btn-s" style="font-size:10px;padding:3px 8px" onclick="loadMatrixResult('${r.id}')">View</button>
+        <button class="btn btn-d" style="font-size:10px;padding:3px 8px" onclick="deleteMatrixRun('${r.id}')">Del</button>
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function deleteMatrixRun(id) {
+  if (!confirm('Delete this matrix run?')) return;
+  await api('DELETE', `/matrix/results/${id}`);
+  loadSavedMatrixRuns();
+}
+
+/* ══════════════════════════════════════════════════════════ */
 /* ── Tab Switching                                          */
 /* ══════════════════════════════════════════════════════════ */
 document.querySelectorAll('.tab').forEach(btn => {
@@ -1092,6 +1542,8 @@ document.querySelectorAll('.tab').forEach(btn => {
     btn.classList.add('active');
     document.getElementById(`p-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'skill') { loadCurrentSkill(); loadSkillVersions(); }
+    if (btn.dataset.tab === 'baselines') { loadSavedBaselineRuns(); }
+    if (btn.dataset.tab === 'matrix') { loadMatrixRunOptions(); loadSavedMatrixRuns(); }
     if (btn.dataset.tab === 'settings') loadConfig();
   });
 });
@@ -1105,6 +1557,8 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s||''
 /* ── Init                                                   */
 /* ══════════════════════════════════════════════════════════ */
 async function init() {
+  const authed = await checkAuth();
+  if (!authed) return;
   connectWS();
   renderCharts();
   try {

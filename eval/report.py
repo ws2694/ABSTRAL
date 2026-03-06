@@ -127,3 +127,81 @@ def generate_trajectory_report(results: list[IterResult], output_path: str) -> s
         json.dump(trajectory, f, indent=2, default=str)
 
     return report_text
+
+
+def generate_run_summary(
+    run: dict,
+    iterations: list[dict],
+    best_spec: dict | None = None,
+) -> dict:
+    """Generate a comprehensive run summary for API/dashboard.
+
+    Args:
+        run: Run metadata from DB (id, config, status, best_auc, etc.)
+        iterations: List of iteration dicts from DB
+        best_spec: Best AgentSpec dict from DB (optional)
+
+    Returns dict suitable for JSON serialization.
+    """
+    config = run.get("config", {})
+
+    # AUC trajectory
+    auc_trajectory = []
+    topology_progression = []
+    token_trajectory = []
+    for it in iterations:
+        metrics = it.get("metrics", {})
+        auc_trajectory.append({
+            "iteration": it.get("iteration", 0),
+            "auc": metrics.get("auc", 0),
+            "auprc": metrics.get("auprc", 0),
+        })
+        topology_progression.append({
+            "iteration": it.get("iteration", 0),
+            "topology": it.get("topology", "?"),
+            "agents": it.get("agents", []),
+        })
+        token_trajectory.append({
+            "iteration": it.get("iteration", 0),
+            "avg_tokens": metrics.get("avg_tokens", 0),
+            "total_tokens": metrics.get("total_tokens", 0),
+        })
+
+    # Best iteration detail
+    best_iter_data = None
+    best_iter_num = run.get("best_iter", -1)
+    for it in iterations:
+        if it.get("iteration") == best_iter_num:
+            best_iter_data = {
+                "iteration": best_iter_num,
+                "topology": it.get("topology"),
+                "agents": it.get("agents", []),
+                "metrics": it.get("metrics", {}),
+                "rationale": it.get("rationale", ""),
+            }
+            break
+
+    # Unique topologies explored
+    unique_topologies = list(set(it.get("topology", "") for it in iterations))
+
+    return {
+        "run_id": run.get("id", ""),
+        "name": run.get("name", ""),
+        "status": run.get("status", ""),
+        "created_at": run.get("created_at", 0),
+        "config": {
+            "model": config.get("model", ""),
+            "agent_model": config.get("agent_model", ""),
+            "sandbox_n": config.get("sandbox_n", 0),
+            "max_iterations": config.get("max_iterations", 0),
+        },
+        "best_auc": run.get("best_auc", 0),
+        "best_iter": best_iter_num,
+        "total_iterations": run.get("total_iterations", len(iterations)),
+        "best_iteration": best_iter_data,
+        "best_spec": best_spec,
+        "auc_trajectory": auc_trajectory,
+        "topology_progression": topology_progression,
+        "token_trajectory": token_trajectory,
+        "unique_topologies": unique_topologies,
+    }

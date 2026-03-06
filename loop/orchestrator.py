@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 
 from config import ABSTRALConfig
+from db import RunDB
 from runner.agent_system import IterResult, CaseResult
 from runner.sandbox import PatientStore
 from runner.topology_runner import TraceLogger, run_single_case
@@ -50,7 +51,8 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
     print(f"Skill: {config.skill_path}")
     print(f"Max iterations: {config.max_iterations}")
     print(f"Sandbox size: {config.sandbox_n}")
-    print(f"Model: {config.model}")
+    print(f"Meta-agent model: {config.model}")
+    print(f"Agent model: {config.agent_model}")
     print()
 
     # Load patient data and models
@@ -61,6 +63,7 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
         "max_iterations": config.max_iterations,
         "sandbox_n": config.sandbox_n,
         "model": config.model,
+        "agent_model": config.agent_model,
     }})
     patient_store = PatientStore.load(config.data_path, config.model_dir)
     print(f"Loaded {len(patient_store.patient_ids)} patients")
@@ -84,6 +87,17 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
     versions_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(config.skill_path, versions_dir / "ABS_v0.md")
 
+    # Initialize run database
+    db = RunDB()
+    config_dict = {
+        "data_path": config.data_path, "skill_path": config.skill_path,
+        "max_iterations": config.max_iterations, "sandbox_n": config.sandbox_n,
+        "model": config.model, "agent_model": config.agent_model,
+    }
+    run_id = db.create_run(config_dict)
+    emit("run_db", {"run_id": run_id})
+    print(f"Run ID: {run_id}")
+
     prior_results: list[IterResult] = []
     best_auc = 0.0
     best_iter = -1
@@ -100,7 +114,8 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
             task_description=config.task_description,
             prior_results=prior_results,
             iteration=iteration,
-            model=config.model
+            model=config.model,
+            agent_model=config.agent_model,
         )
         print(f"  Topology: {spec.topology}")
         print(f"  Agents: {spec.agent_ids}")
@@ -121,6 +136,9 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
         trace_dir = str(Path(config.trace_dir) / f"iter_{iteration:03d}")
         tracer = TraceLogger(trace_dir)
 
+        # Agent execution uses agent_model (may differ from meta-agent model)
+        agent_model = config.agent_model
+
         # Try batch API if enabled, fall back to streaming if not supported
         case_results = None
         if config.use_batch_api:
@@ -129,14 +147,14 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
                 case_results = await run_batch_single_topology(
                     spec=spec, patient_ids=sandbox_cases,
                     patient_store=patient_store, tracer=tracer,
-                    model=config.model, precomputed=precomputed,
+                    model=agent_model, precomputed=precomputed,
                     on_event=on_event,
                 )
             elif spec.topology == "pipeline":
                 case_results = await run_batch_staged_topology(
                     spec=spec, patient_ids=sandbox_cases,
                     patient_store=patient_store, tracer=tracer,
-                    model=config.model, precomputed=precomputed,
+                    model=agent_model, precomputed=precomputed,
                     on_event=on_event,
                 )
             if case_results is None:
@@ -149,7 +167,7 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
                 patient_ids=sandbox_cases,
                 patient_store=patient_store,
                 tracer=tracer,
-                model=config.model,
+                model=agent_model,
                 max_concurrent=config.max_concurrent,
                 on_event=on_event,
                 iteration=iteration,
@@ -181,6 +199,10 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
         # Generate iteration report
         report = generate_iteration_report(iter_result, trace_dir)
 
+        # Persist to database
+        db.save_iteration(run_id, iter_result)
+        db.save_cases(run_id, iteration, case_results)
+
         # Track best
         is_new_best = False
         if metrics.get("auc", 0) > best_auc:
@@ -188,6 +210,7 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
             best_iter = iteration
             is_new_best = True
             shutil.copy(config.skill_path, "skills/best_skill.md")
+            db.update_run(run_id, best_auc=best_auc, best_iter=best_iter)
             print(f"  ★ New best: AUC {best_auc:.4f}")
 
         emit("iteration_complete", {
@@ -257,6 +280,10 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
         prior_results, "traces/trajectory_report.txt"
     )
     print(f"\n{trajectory_report}")
+
+    # Finalize database
+    db.update_run(run_id, status="completed", total_iterations=len(prior_results))
+    db.close()
 
     return prior_results
 

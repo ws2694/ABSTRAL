@@ -133,11 +133,14 @@ async def compile_agent_spec(
     task_description: str,
     prior_results: list[IterResult],
     iteration: int,
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-20250514",
+    agent_model: str | None = None,
 ) -> AgentSpec:
     """Read SKILL.md and compile it into a concrete AgentSpec via Claude.
 
     This is the BUILD step of the ABSTRAL meta-loop.
+    The compiler itself runs on `model` (meta-agent), but sets
+    `agent_model` on each produced AgentConfig for execution.
     """
     with open(skill_path) as f:
         skill_text = f.read()
@@ -195,7 +198,8 @@ Include your rationale field explaining your design choices.
             role=role,
             system_prompt=system_prompt,
             tools=raw_tools,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            model=agent_model,
         ))
 
     # Ensure at least one agent exists
@@ -210,7 +214,8 @@ Include your rationale field explaining your design choices.
             ),
             tools=["predict_risk", "get_patient_features",
                    "compute_ops_trajectory", "lookup_drug_interaction"],
-            max_tokens=800
+            max_tokens=800,
+            model=agent_model,
         ))
 
     spec = AgentSpec(

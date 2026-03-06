@@ -20,6 +20,7 @@ class AgentConfig:
     system_prompt: str     # full system prompt text
     tools: list[str]       # subset of ONCO_TOOLS this agent can call
     max_tokens: int = 800
+    model: str | None = None  # per-agent model override; None = use config.agent_model
 
     def to_dict(self) -> dict:
         return asdict(self)

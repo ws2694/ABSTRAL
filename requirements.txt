@@ -7,3 +7,7 @@ pyarrow>=14.0.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 websockets>=12.0
+
+# Optional: multi-model support (install for cross-provider validation)
+# openai>=1.0.0
+# google-genai>=1.0.0

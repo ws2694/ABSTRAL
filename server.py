@@ -119,12 +119,55 @@ run_state = RunState()
 
 app = FastAPI(title="ABSTRAL Dashboard", version="1.0.0")
 
+_cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Auth Middleware ───────────────────────────────────────────────────────────
+
+_AUTH_EXEMPT = {"/", "/api/status", "/api/auth/check", "/api/auth/login"}
+
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    """Simple shared-password auth. Disabled if ABSTRAL_AUTH_TOKEN is unset."""
+    token = os.environ.get("ABSTRAL_AUTH_TOKEN")
+    if not token:
+        return await call_next(request)
+    # Exempt paths (health check, landing page, auth check)
+    if request.url.path in _AUTH_EXEMPT:
+        return await call_next(request)
+    # Check Authorization header or ?token= query param
+    auth = request.headers.get("authorization", "")
+    qtoken = request.query_params.get("token", "")
+    if auth == f"Bearer {token}" or qtoken == token:
+        return await call_next(request)
+    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+
+@app.get("/api/auth/check")
+async def auth_check():
+    """Check if auth is enabled and validate a token."""
+    token = os.environ.get("ABSTRAL_AUTH_TOKEN")
+    if not token:
+        return {"auth_required": False, "valid": True}
+    return {"auth_required": True}
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: dict):
+    """Validate password and return success."""
+    token = os.environ.get("ABSTRAL_AUTH_TOKEN")
+    if not token:
+        return {"valid": True}
+    if body.get("password") == token:
+        return {"valid": True, "token": token}
+    return JSONResponse({"error": "Invalid password"}, status_code=401)
 
 
 # ── Page Routes ───────────────────────────────────────────────────────────────
@@ -155,13 +198,15 @@ async def get_status():
 async def get_config():
     if run_state.config:
         return run_state.config
+    _dd = os.environ.get("DATA_DIR", "data")
     return {
-        "data_path": "data/oncoagent.parquet",
+        "data_path": f"{_dd}/oncoagent_7315.parquet",
         "skill_path": "skills/clinical_agent_builder.md",
         "max_iterations": 15,
         "sandbox_n": 150,
         "model": "claude-sonnet-4-20250514",
-        "model_dir": "data/models",
+        "agent_model": "claude-sonnet-4-20250514",
+        "model_dir": f"{_dd}/models",
         "random_seed": 42,
         "max_concurrent": 10,
         "use_batch_api": False,
@@ -370,10 +415,340 @@ async def check_prerequisites():
     return {"checks": checks, "all_ok": all(c["ok"] for c in checks)}
 
 
+# ── API: Runs (Database) ─────────────────────────────────────────────────────
+
+def _get_db():
+    from db import RunDB
+    return RunDB()
+
+
+@app.get("/api/runs")
+async def list_runs():
+    db = _get_db()
+    runs = db.list_runs()
+    db.close()
+    return runs
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run(run_id: str):
+    db = _get_db()
+    run = db.get_run(run_id)
+    db.close()
+    if not run:
+        return JSONResponse({"error": "Run not found"}, 404)
+    return run
+
+
+@app.get("/api/runs/{run_id}/iterations")
+async def get_run_iterations(run_id: str):
+    db = _get_db()
+    iterations = db.get_iterations(run_id)
+    db.close()
+    return iterations
+
+
+@app.get("/api/runs/{run_id}/best-spec")
+async def get_run_best_spec(run_id: str):
+    db = _get_db()
+    spec = db.get_best_spec(run_id)
+    db.close()
+    if not spec:
+        return JSONResponse({"error": "No best spec found"}, 404)
+    return spec
+
+
+@app.get("/api/runs/{run_id}/best-spec/download")
+async def download_best_spec(run_id: str):
+    db = _get_db()
+    spec = db.get_best_spec(run_id)
+    db.close()
+    if not spec:
+        return JSONResponse({"error": "No best spec found"}, 404)
+    content = json.dumps(spec, indent=2, default=str)
+    return JSONResponse(
+        content=json.loads(content),
+        headers={"Content-Disposition": f"attachment; filename=best_spec_{run_id}.json"}
+    )
+
+
+@app.delete("/api/runs/{run_id}")
+async def delete_run(run_id: str):
+    db = _get_db()
+    db.delete_run(run_id)
+    db.close()
+    return {"ok": True}
+
+
+@app.get("/api/runs/{run_id}/summary")
+async def get_run_summary(run_id: str):
+    db = _get_db()
+    run = db.get_run(run_id)
+    if not run:
+        db.close()
+        return JSONResponse({"error": "Run not found"}, 404)
+    iterations = db.get_iterations(run_id)
+    best_spec = db.get_best_spec(run_id)
+    db.close()
+
+    from eval.report import generate_run_summary
+    return generate_run_summary(run, iterations, best_spec)
+
+
+# ── API: Topology Export ─────────────────────────────────────────────────────
+
+@app.get("/api/iterations/{iteration}/spec/download")
+async def download_iteration_spec(iteration: int):
+    spec = run_state.agent_specs.get(iteration)
+    if not spec:
+        return JSONResponse({"error": "Spec not found"}, 404)
+    content = json.dumps(spec, indent=2, default=str)
+    return JSONResponse(
+        content=json.loads(content),
+        headers={"Content-Disposition": f"attachment; filename=spec_iter_{iteration}.json"}
+    )
+
+
+# ── API: Baselines ──────────────────────────────────────────────────────────
+
+# Track running baseline/matrix tasks
+_baseline_task: Optional[asyncio.Task] = None
+_matrix_task: Optional[asyncio.Task] = None
+_baseline_status = {"status": "idle", "run_id": None}
+_matrix_status = {"status": "idle", "run_id": None}
+
+
+@app.post("/api/baselines/run")
+async def run_baselines_endpoint(body: dict = None):
+    global _baseline_task, _baseline_status
+    if _baseline_status["status"] == "running":
+        return JSONResponse({"error": "Baselines already running"}, 400)
+
+    body = body or {}
+    _baseline_status = {"status": "running", "run_id": None}
+    _baseline_task = asyncio.create_task(_run_baselines_task(body))
+    return {"ok": True, "message": "Baselines started"}
+
+
+async def _run_baselines_task(body: dict):
+    global _baseline_status
+    try:
+        from runner.sandbox import PatientStore
+        from baselines.runner import run_all_baselines
+
+        data_path = body.get("data_path", "data/oncoagent.parquet")
+        model_dir = body.get("model_dir", "data/models")
+        model = body.get("model", "claude-sonnet-4-20250514")
+        sandbox_n = body.get("sandbox_n", 150)
+        seed = body.get("seed", 42)
+        baselines_list = body.get("baselines")  # None = all
+
+        config = {
+            "data_path": data_path, "model_dir": model_dir, "model": model,
+            "sandbox_n": sandbox_n, "seed": seed, "baselines": baselines_list,
+        }
+
+        # Create DB record early
+        db = _get_db()
+        run_id = db.save_baseline_run(config, {})
+        db.update_baseline_run(run_id, status="running")
+        db.close()
+        _baseline_status["run_id"] = run_id
+
+        event_bus.emit("baseline_started", {"run_id": run_id, "config": config})
+
+        patient_store = PatientStore.load(data_path, model_dir)
+        patient_ids = patient_store.stratified_sample(n=sandbox_n, seed=seed)
+
+        results = await run_all_baselines(
+            patient_ids=patient_ids,
+            patient_store=patient_store,
+            model=model,
+            baselines=baselines_list,
+        )
+
+        # Strip case_results for storage
+        stored = {}
+        for name, data in results.items():
+            stored[name] = {
+                "metrics": data["metrics"],
+                "total_tokens": data["total_tokens"],
+                "n_cases": len(data.get("case_results", [])),
+            }
+
+        db = _get_db()
+        db.update_baseline_run(run_id, status="completed", results=stored)
+        db.close()
+
+        _baseline_status = {"status": "completed", "run_id": run_id}
+        event_bus.emit("baseline_complete", {"run_id": run_id, "results": stored})
+
+    except Exception as e:
+        if _baseline_status.get("run_id"):
+            db = _get_db()
+            db.update_baseline_run(_baseline_status["run_id"], status="error")
+            db.close()
+        _baseline_status = {"status": "error", "run_id": _baseline_status.get("run_id"),
+                            "error": str(e)}
+        event_bus.emit("baseline_error", {"error": str(e)})
+
+
+@app.get("/api/baselines/status")
+async def get_baselines_status():
+    return _baseline_status
+
+
+@app.get("/api/baselines/results")
+async def list_baseline_results():
+    db = _get_db()
+    runs = db.list_baseline_runs()
+    db.close()
+    return runs
+
+
+@app.get("/api/baselines/results/{run_id}")
+async def get_baseline_result(run_id: str):
+    db = _get_db()
+    run = db.get_baseline_run(run_id)
+    db.close()
+    if not run:
+        return JSONResponse({"error": "Baseline run not found"}, 404)
+    return run
+
+
+@app.delete("/api/baselines/results/{run_id}")
+async def delete_baseline_result(run_id: str):
+    db = _get_db()
+    db.delete_baseline_run(run_id)
+    db.close()
+    return {"ok": True}
+
+
+# ── API: Topology Matrix ─────────────────────────────────────────────────────
+
+@app.post("/api/matrix/run")
+async def run_matrix_endpoint(body: dict = None):
+    global _matrix_task, _matrix_status
+    if _matrix_status["status"] == "running":
+        return JSONResponse({"error": "Matrix already running"}, 400)
+
+    body = body or {}
+    _matrix_status = {"status": "running", "run_id": None}
+    _matrix_task = asyncio.create_task(_run_matrix_task(body))
+    return {"ok": True, "message": "Matrix started"}
+
+
+async def _run_matrix_task(body: dict):
+    global _matrix_status
+    try:
+        from runner.sandbox import PatientStore
+        from runner.agent_system import AgentSpec
+        from baselines.topology_matrix import run_topology_matrix
+
+        data_path = body.get("data_path", "data/oncoagent.parquet")
+        model_dir = body.get("model_dir", "data/models")
+        sandbox_n = body.get("sandbox_n", 50)
+        seed = body.get("seed", 42)
+        models = body.get("models", ["claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"])
+
+        # Get spec: either from body or from a run_id
+        spec_dict = body.get("spec")
+        source_run_id = body.get("source_run_id")
+        if not spec_dict and source_run_id:
+            db = _get_db()
+            spec_dict = db.get_best_spec(source_run_id)
+            db.close()
+        if not spec_dict:
+            _matrix_status = {"status": "error", "error": "No spec provided"}
+            return
+
+        spec_dict.pop("_metrics", None)
+        spec = AgentSpec.from_dict(spec_dict)
+
+        config = {
+            "data_path": data_path, "model_dir": model_dir,
+            "sandbox_n": sandbox_n, "seed": seed,
+            "models": models, "topology": spec.topology,
+            "source_run_id": source_run_id,
+        }
+
+        db = _get_db()
+        run_id = db.save_matrix_run(config, {})
+        db.update_matrix_run(run_id, status="running")
+        db.close()
+        _matrix_status["run_id"] = run_id
+
+        event_bus.emit("matrix_started", {"run_id": run_id, "config": config})
+
+        patient_store = PatientStore.load(data_path, model_dir)
+        patient_ids = patient_store.stratified_sample(n=sandbox_n, seed=seed)
+
+        results = await run_topology_matrix(
+            spec=spec,
+            patient_ids=patient_ids,
+            patient_store=patient_store,
+            models=models,
+        )
+
+        db = _get_db()
+        db.update_matrix_run(run_id, status="completed", results=results)
+        db.close()
+
+        _matrix_status = {"status": "completed", "run_id": run_id}
+        event_bus.emit("matrix_complete", {"run_id": run_id, "results": results})
+
+    except Exception as e:
+        if _matrix_status.get("run_id"):
+            db = _get_db()
+            db.update_matrix_run(_matrix_status["run_id"], status="error")
+            db.close()
+        _matrix_status = {"status": "error", "run_id": _matrix_status.get("run_id"),
+                          "error": str(e)}
+        event_bus.emit("matrix_error", {"error": str(e)})
+
+
+@app.get("/api/matrix/status")
+async def get_matrix_status():
+    return _matrix_status
+
+
+@app.get("/api/matrix/results")
+async def list_matrix_results():
+    db = _get_db()
+    runs = db.list_matrix_runs()
+    db.close()
+    return runs
+
+
+@app.get("/api/matrix/results/{run_id}")
+async def get_matrix_result(run_id: str):
+    db = _get_db()
+    run = db.get_matrix_run(run_id)
+    db.close()
+    if not run:
+        return JSONResponse({"error": "Matrix run not found"}, 404)
+    return run
+
+
+@app.delete("/api/matrix/results/{run_id}")
+async def delete_matrix_result(run_id: str):
+    db = _get_db()
+    db.delete_matrix_run(run_id)
+    db.close()
+    return {"ok": True}
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Auth check for WebSocket (token via query param)
+    token = os.environ.get("ABSTRAL_AUTH_TOKEN")
+    if token:
+        qtoken = websocket.query_params.get("token", "")
+        if qtoken != token:
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
     await websocket.accept()
 
     # Send current state on connect
@@ -427,6 +802,8 @@ async def _run_abstral_task(config_dict: dict):
             max_iterations=config_dict.get("max_iterations", 15),
             sandbox_n=config_dict.get("sandbox_n", 150),
             model=config_dict.get("model", "claude-sonnet-4-20250514"),
+            agent_model=config_dict.get("agent_model",
+                         config_dict.get("model", "claude-sonnet-4-20250514")),
             model_dir=config_dict.get("model_dir", "data/models"),
             max_concurrent=config_dict.get("max_concurrent", 10),
             use_batch_api=config_dict.get("use_batch_api", False),

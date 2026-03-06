@@ -14,9 +14,8 @@ import re
 import time
 from pathlib import Path
 
-import anthropic
-
 from runner.agent_system import AgentConfig, AgentSpec, AgentResult, CaseResult
+from runner.llm_client import llm_call, get_provider
 from runner.tool_executor import execute_tool
 from tools.tool_definitions import get_tools_for_agent
 
@@ -51,11 +50,14 @@ class TraceLogger:
     def log_api_call(self, agent_id: str, messages: list, response, token_count: int):
         if self._current_case is None:
             return
-        # Extract text reasoning from response
+        # Extract text reasoning from response (works with LLMResponse and native)
         reasoning = ""
         for block in response.content:
-            if hasattr(block, "text"):
-                reasoning = block.text[:500]  # truncate for trace storage
+            text = getattr(block, "text", None)
+            if text is None and isinstance(block, dict):
+                text = block.get("text")
+            if text:
+                reasoning = text[:500]  # truncate for trace storage
                 break
 
         trace_entry = {
@@ -173,10 +175,22 @@ def _build_user_prompt(patient_id: str, context: dict, role: str) -> str:
 
 
 def _extract_text(response) -> str:
-    """Extract text content from a Claude API response."""
+    """Extract text content from a Claude API response (legacy, for batch_runner)."""
     for block in response.content:
         if hasattr(block, "text"):
             return block.text
+    return ""
+
+
+def _extract_text_from_response(response) -> str:
+    """Extract text content from an LLMResponse or native API response."""
+    if response is None:
+        return ""
+    for block in response.content:
+        if hasattr(block, "text") and block.text:
+            return block.text
+        elif isinstance(block, dict) and block.get("text"):
+            return block["text"]
     return ""
 
 
@@ -214,44 +228,6 @@ def _extract_structured_outputs(response_text: str) -> dict:
     return outputs
 
 
-async def _api_call_with_retry(
-    client, model, max_tokens, system, tools, messages,
-    max_retries=8, initial_delay=5.0, on_event=None, agent_id=""
-):
-    """Call Claude API with exponential backoff on rate limit errors."""
-    def emit(etype, data=None):
-        if on_event:
-            on_event(etype, data or {})
-
-    delay = initial_delay
-    for attempt in range(max_retries):
-        try:
-            kwargs = dict(model=model, max_tokens=max_tokens,
-                          system=system, messages=messages)
-            if tools:
-                kwargs["tools"] = tools
-            return await client.messages.create(**kwargs)
-        except anthropic.RateLimitError:
-            if attempt == max_retries - 1:
-                raise
-            wait = delay + (attempt * 2)
-            print(f"    [rate-limit] Waiting {wait:.0f}s (attempt {attempt + 1}/{max_retries})...")
-            emit("rate_limit_wait", {"agent_id": agent_id, "wait_s": round(wait), "attempt": attempt + 1})
-            await asyncio.sleep(wait)
-            delay = min(delay * 1.5, 60)
-        except anthropic.APIStatusError as e:
-            if e.status_code == 529:  # overloaded
-                if attempt == max_retries - 1:
-                    raise
-                wait = delay + (attempt * 3)
-                print(f"    [overloaded] Waiting {wait:.0f}s...")
-                emit("api_overloaded", {"agent_id": agent_id, "wait_s": round(wait)})
-                await asyncio.sleep(wait)
-                delay = min(delay * 1.5, 60)
-            else:
-                raise
-
-
 async def _run_agent(
     agent: AgentConfig,
     patient_id: str,
@@ -262,16 +238,19 @@ async def _run_agent(
     on_event=None,
     injected_tool_data: dict | None = None,
 ) -> AgentResult:
-    """Execute a single agent on a patient case via the Anthropic API.
+    """Execute a single agent on a patient case via the LLM client.
 
     This is the core primitive — all topologies use this function.
     Handles the agentic loop (tool_use → tool_result → continue).
+    Supports Anthropic, OpenAI, and Google models via llm_client.
     """
     def emit(etype, data=None):
         if on_event:
             on_event(etype, data or {})
 
-    client = anthropic.AsyncAnthropic()
+    # Resolve model: per-agent override > topology default
+    effective_model = agent.model or model
+
     user_prompt = _build_user_prompt(patient_id, context, agent.role)
 
     # When pre-computed tool data is available, inject it into the prompt
@@ -285,24 +264,26 @@ async def _run_agent(
             user_prompt += f"[{tool_name}]:\n{json.dumps(tool_result, indent=2, default=str)}\n\n"
     else:
         tools = get_tools_for_agent(agent.tools)
-        # Add cache_control to last tool for prompt caching (M3)
-        if tools:
+        # Add cache_control to last tool for prompt caching (Anthropic only)
+        if tools and get_provider(effective_model) == "anthropic":
             tools = [dict(t) for t in tools]  # shallow copy to avoid mutating originals
             tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
 
-    # Use structured system prompt with cache_control for prompt caching (M3).
-    # The system prompt is identical across all patients for the same agent,
-    # so caching it saves ~90% on input tokens after the first call.
-    system_with_cache = [{
-        "type": "text",
-        "text": agent.system_prompt,
-        "cache_control": {"type": "ephemeral"}
-    }]
+    # System prompt — use cache_control for Anthropic models
+    if get_provider(effective_model) == "anthropic":
+        system_prompt = [{
+            "type": "text",
+            "text": agent.system_prompt,
+            "cache_control": {"type": "ephemeral"}
+        }]
+    else:
+        system_prompt = agent.system_prompt
 
     emit("agent_start", {
         "patient_id": patient_id,
         "agent_id": agent.agent_id,
         "role": agent.role,
+        "model": effective_model,
         "n_tools": len(tools) if tools else 0,
     })
 
@@ -311,17 +292,19 @@ async def _run_agent(
     max_turns = 1 if injected_tool_data else 10
     turn = 0
 
+    response = None
     for _ in range(max_turns):
         turn += 1
-        response = await _api_call_with_retry(
-            client, model, agent.max_tokens,
-            system_with_cache, tools, messages,
-            on_event=on_event, agent_id=agent.agent_id
+        response = await llm_call(
+            model=effective_model,
+            system=system_prompt,
+            messages=messages,
+            tools=tools,
+            max_tokens=agent.max_tokens,
+            on_event=on_event,
+            agent_id=agent.agent_id,
         )
-        usage = response.usage
-        token_count += usage.input_tokens + usage.output_tokens
-        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-        cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        token_count += response.input_tokens + response.output_tokens
         tracer.log_api_call(agent.agent_id, messages, response, token_count)
 
         if response.stop_reason == "end_turn":
@@ -331,22 +314,26 @@ async def _run_agent(
         tool_results = []
         has_tool_use = False
         for block in response.content:
-            if block.type == "tool_use":
+            block_type = block.type if hasattr(block, "type") else block.get("type", "")
+            if block_type == "tool_use":
                 has_tool_use = True
+                tool_name = block.name if hasattr(block, "name") else block.get("name", "")
+                tool_input = block.input if hasattr(block, "input") else block.get("input", {})
+                tool_id = block.id if hasattr(block, "id") else block.get("id", "")
                 emit("agent_tool_call", {
                     "patient_id": patient_id,
                     "agent_id": agent.agent_id,
-                    "tool": block.name,
+                    "tool": tool_name,
                     "turn": turn,
                 })
                 try:
-                    result = execute_tool(block.name, block.input, patient_store)
+                    result = execute_tool(tool_name, tool_input, patient_store)
                 except Exception as e:
                     result = {"error": str(e)}
-                tracer.log_tool_call(agent.agent_id, block.name, block.input, result)
+                tracer.log_tool_call(agent.agent_id, tool_name, tool_input, result)
                 tool_results.append({
                     "type": "tool_result",
-                    "tool_use_id": block.id,
+                    "tool_use_id": tool_id,
                     "content": json.dumps(result, default=str)
                 })
 
@@ -356,13 +343,14 @@ async def _run_agent(
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
 
-    final_text = _extract_text(response)
+    final_text = _extract_text_from_response(response)
     outputs = _extract_structured_outputs(final_text)
     tracer.log_agent_output(agent.agent_id, outputs)
 
     emit("agent_complete", {
         "patient_id": patient_id,
         "agent_id": agent.agent_id,
+        "model": effective_model,
         "tokens": token_count,
         "turns": turn,
         "has_risk_score": "risk_score" in outputs,
