@@ -13,6 +13,8 @@ class ABSTRALConfig:
     model: str = "claude-sonnet-4-20250514"
     model_dir: str = "data/models"
     trace_dir: str = "traces"
+    max_concurrent: int = 10
+    use_batch_api: bool = False
     convergence_patience: int = 3
     convergence_threshold: float = 0.005
     skill_convergence_patience: int = 2

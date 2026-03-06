@@ -20,6 +20,7 @@ from config import ABSTRALConfig
 from runner.agent_system import IterResult, CaseResult
 from runner.sandbox import PatientStore
 from runner.topology_runner import TraceLogger, run_single_case
+from runner.batch_runner import run_batch_single_topology, run_batch_staged_topology
 from loop.abs_compiler import compile_agent_spec
 from loop.trace_analyzer import analyze_traces
 from loop.skill_editor import apply_diagnosis, compute_skill_diff
@@ -112,21 +113,48 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
         })
 
         # ── STEP 2: Run on sandbox cases ───────────────────────────────
-        print(f"\n[RUN] Executing on {len(sandbox_cases)} sandbox cases...")
+        print(f"\n[RUN] Pre-computing tool results for {len(sandbox_cases)} cases...")
+        precomputed = patient_store.precompute_all(sandbox_cases)
+        print(f"  Pre-computed {len(precomputed)} patient tool results")
+
+        print(f"[RUN] Executing on {len(sandbox_cases)} sandbox cases...")
         trace_dir = str(Path(config.trace_dir) / f"iter_{iteration:03d}")
         tracer = TraceLogger(trace_dir)
 
-        # Run cases with concurrency limit to avoid API rate limits
-        case_results = await _run_cases_with_limit(
-            spec=spec,
-            patient_ids=sandbox_cases,
-            patient_store=patient_store,
-            tracer=tracer,
-            model=config.model,
-            max_concurrent=2,
-            on_event=on_event,
-            iteration=iteration,
-        )
+        # Try batch API if enabled, fall back to streaming if not supported
+        case_results = None
+        if config.use_batch_api:
+            print("  Using Batch API...")
+            if spec.topology == "single":
+                case_results = await run_batch_single_topology(
+                    spec=spec, patient_ids=sandbox_cases,
+                    patient_store=patient_store, tracer=tracer,
+                    model=config.model, precomputed=precomputed,
+                    on_event=on_event,
+                )
+            elif spec.topology == "pipeline":
+                case_results = await run_batch_staged_topology(
+                    spec=spec, patient_ids=sandbox_cases,
+                    patient_store=patient_store, tracer=tracer,
+                    model=config.model, precomputed=precomputed,
+                    on_event=on_event,
+                )
+            if case_results is None:
+                print("  Batch API not supported for this topology, falling back to streaming...")
+
+        if case_results is None:
+            # Streaming path with concurrency limit
+            case_results = await _run_cases_with_limit(
+                spec=spec,
+                patient_ids=sandbox_cases,
+                patient_store=patient_store,
+                tracer=tracer,
+                model=config.model,
+                max_concurrent=config.max_concurrent,
+                on_event=on_event,
+                iteration=iteration,
+                precomputed=precomputed,
+            )
         tracer.finalize()
 
         # ── STEP 3: Evaluate ───────────────────────────────────────────
@@ -234,8 +262,8 @@ async def run_abstral(config: ABSTRALConfig, on_event=None) -> list[IterResult]:
 
 
 async def _run_cases_with_limit(
-    spec, patient_ids, patient_store, tracer, model, max_concurrent=2,
-    on_event=None, iteration=-1,
+    spec, patient_ids, patient_store, tracer, model, max_concurrent=10,
+    on_event=None, iteration=-1, precomputed=None,
 ) -> list[CaseResult]:
     """Run cases with a concurrency semaphore to avoid API rate limits."""
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -244,13 +272,15 @@ async def _run_cases_with_limit(
 
     async def run_one(idx, pid):
         async with semaphore:
+            injected = precomputed.get(pid) if precomputed else None
             return await run_single_case(
                 spec=spec,
                 patient_id=pid,
                 patient_store=patient_store,
                 tracer=tracer,
                 model=model,
-                on_event=on_event
+                on_event=on_event,
+                injected_tool_data=injected,
             )
 
     tasks = [run_one(i, pid) for i, pid in enumerate(patient_ids)]

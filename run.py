@@ -92,6 +92,10 @@ def main():
         help="Max concurrent API calls"
     )
     parser.add_argument(
+        "--batch", action="store_true",
+        help="Use Anthropic Batch API for the RUN step (50%% cheaper, higher throughput)"
+    )
+    parser.add_argument(
         "--init", action="store_true",
         help="Just check prerequisites, don't run"
     )
@@ -108,6 +112,8 @@ def main():
         sandbox_n=args.sandbox_n,
         model=args.claude_model,
         model_dir=args.model_dir,
+        max_concurrent=args.max_concurrent,
+        use_batch_api=args.batch,
         random_seed=args.seed
     )
 

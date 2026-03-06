@@ -2,5 +2,4 @@ data/
 traces/
 .env
 __pycache__/
-skills/versions/
 *.pyc
