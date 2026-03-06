@@ -68,17 +68,26 @@ abstral/
 │   ├── metrics.py             #   AUC, AUPRC, Brier, CCS
 │   └── report.py              #   Iteration & trajectory reports
 │
-├── skills/                    # Skill documents
-│   ├── clinical_agent_builder.md  # Current ABS (evolves each iteration)
-│   ├── best_skill.md              # Highest-AUC snapshot
-│   └── versions/                  # Per-iteration snapshots (ABS_v0.md, ...)
+├── skills/                    # Skill documents (the "DNA" of the agent system)
+│   ├── clinical_agent_builder.md  # Current ABS — the live skill that evolves each iteration
+│   ├── best_skill.md              # Snapshot of the highest-AUC skill found so far
+│   └── versions/                  # Full iteration history (ABS_v0.md → ABS_v15.md)
+│       └── ABS_v{N}.md            #   Each file is the skill after iteration N's UPDATE step
 │
 ├── webapp/
 │   └── index.html             # Real-time dashboard (single-file SPA)
 │
+├── scripts/
+│   └── convert_nhird.py       # NHIRD CSV → ABSTRAL parquet converter
+│
+├── tests/                     # Test suite (L1-L4)
+│   ├── test_perf_optimizations.py  # L1-L3: syntax, logic, API integration
+│   ├── test_level4_benchmark.py    # L4: performance comparison benchmarks
+│   └── generate_synthetic_data.py  # Synthetic data generator for testing
+│
 ├── data/                      # Patient data + trained models (not in git)
-│   ├── oncoagent_7315.parquet
-│   ├── features.npy           #   Pre-computed 123-dim benchmark features
+│   ├── oncoagent.parquet      #   Converted from NHIRD CSV
+│   ├── features.npy           #   Pre-computed 64-dim feature vectors
 │   ├── labels.npy
 │   └── models/
 │       ├── mlp.pkl
@@ -104,14 +113,15 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # Or create a .env file:
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 
-# 3. Place patient data
-cp your_data.parquet data/oncoagent_7315.parquet
+# 3. Convert NHIRD data (if using real data)
+python3 scripts/convert_nhird.py --csv path/to/12.31_data_with_relative_days.csv
 
-# 4. Train ML models
-python train_models.py --data data/oncoagent_7315.parquet
+# Or place your own parquet + train models manually:
+# cp your_data.parquet data/oncoagent.parquet
+# python3 train_models.py --data-dir data/
 
-# 5. Verify setup
-python run.py --init
+# 4. Verify setup
+python3 run.py --init
 ```
 
 ## Usage
@@ -120,20 +130,20 @@ python run.py --init
 
 ```bash
 # Smoke test (2 iterations, 10 patients)
-python run.py --iters 2 --sandbox-n 10
+python3 run.py --iters 2 --sandbox-n 10
 
-# Full run
-python run.py --iters 15 --sandbox-n 150
+# Full run (with performance optimizations)
+python3 run.py --iters 15 --sandbox-n 150 --max-concurrent 10
 
-# Custom settings
-python run.py --iters 10 --sandbox-n 100 --claude-model claude-sonnet-4-20250514
+# Use Batch API (50% cheaper, bypasses rate limits)
+python3 run.py --iters 15 --sandbox-n 150 --batch
 ```
 
 ### Web Dashboard
 
 ```bash
-python server.py              # starts on http://localhost:8420
-python server.py --port 3000  # custom port
+python3 server.py              # starts on http://localhost:8420
+python3 server.py --port 3000  # custom port
 ```
 
 The dashboard provides 6 tabs:
@@ -156,7 +166,9 @@ The loop stops when any of these conditions are met:
 
 ## Key Design Decisions
 
-- **Benchmark feature alignment**: ML models are trained on 123-dim features pre-computed from the full dataset. PatientStore loads `features.npy` to ensure prediction consistency between training and inference.
-- **Rate limit handling**: Exponential backoff with jitter on Anthropic API rate limits (429) and overload (529) errors. Max concurrency capped at 2 to stay within token-per-minute limits.
+- **Benchmark feature alignment**: ML models are trained on 64-dim features pre-computed from the full dataset. PatientStore loads `features.npy` to ensure prediction consistency between training and inference.
+- **Performance optimizations**: Pre-computed tool results eliminate multi-turn tool-use loops (4.3x token reduction). Adaptive concurrency (default 10), prompt caching, and Batch API support yield ~6.8x wall-time speedup.
+- **Rate limit handling**: Exponential backoff with jitter on Anthropic API rate limits (429) and overload (529) errors. Adaptive concurrency adjusts dynamically based on API response patterns.
 - **Deterministic tools**: All tool functions (predict_risk, compute_ops_trajectory, lookup_drug_interaction, get_patient_features) are pure and seeded — same input always produces same output.
 - **Trace-cited skill edits**: Every rule added to SKILL.md includes a `<!-- [Evidence: trace Pxxxxx, iter N] -->` citation linking back to the specific patient case that motivated it.
+- **NHIRD data support**: Conversion script maps 136-column NHIRD lung cancer CSV (7,315 patients) to ABSTRAL format with drug class mapping, CCI scoring, and fracture extraction.

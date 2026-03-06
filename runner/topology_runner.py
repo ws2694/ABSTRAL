@@ -226,13 +226,11 @@ async def _api_call_with_retry(
     delay = initial_delay
     for attempt in range(max_retries):
         try:
-            return await client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                tools=tools if tools else None,
-                messages=messages
-            )
+            kwargs = dict(model=model, max_tokens=max_tokens,
+                          system=system, messages=messages)
+            if tools:
+                kwargs["tools"] = tools
+            return await client.messages.create(**kwargs)
         except anthropic.RateLimitError:
             if attempt == max_retries - 1:
                 raise
@@ -261,7 +259,8 @@ async def _run_agent(
     patient_store,
     tracer: TraceLogger,
     model: str = "claude-sonnet-4-20250514",
-    on_event=None
+    on_event=None,
+    injected_tool_data: dict | None = None,
 ) -> AgentResult:
     """Execute a single agent on a patient case via the Anthropic API.
 
@@ -273,8 +272,32 @@ async def _run_agent(
             on_event(etype, data or {})
 
     client = anthropic.AsyncAnthropic()
-    tools = get_tools_for_agent(agent.tools)
     user_prompt = _build_user_prompt(patient_id, context, agent.role)
+
+    # When pre-computed tool data is available, inject it into the prompt
+    # and skip tool definitions entirely — single-turn, no tool-use loop.
+    if injected_tool_data:
+        tools = None
+        user_prompt += "\n\n--- Pre-computed Tool Results ---\n"
+        user_prompt += "All tool results have been pre-computed for this patient. "
+        user_prompt += "Use this data directly — do NOT attempt to call tools.\n\n"
+        for tool_name, tool_result in injected_tool_data.items():
+            user_prompt += f"[{tool_name}]:\n{json.dumps(tool_result, indent=2, default=str)}\n\n"
+    else:
+        tools = get_tools_for_agent(agent.tools)
+        # Add cache_control to last tool for prompt caching (M3)
+        if tools:
+            tools = [dict(t) for t in tools]  # shallow copy to avoid mutating originals
+            tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+
+    # Use structured system prompt with cache_control for prompt caching (M3).
+    # The system prompt is identical across all patients for the same agent,
+    # so caching it saves ~90% on input tokens after the first call.
+    system_with_cache = [{
+        "type": "text",
+        "text": agent.system_prompt,
+        "cache_control": {"type": "ephemeral"}
+    }]
 
     emit("agent_start", {
         "patient_id": patient_id,
@@ -285,23 +308,26 @@ async def _run_agent(
 
     messages = [{"role": "user", "content": user_prompt}]
     token_count = 0
-    max_turns = 10  # safety limit on tool-use loops
+    max_turns = 1 if injected_tool_data else 10
     turn = 0
 
     for _ in range(max_turns):
         turn += 1
         response = await _api_call_with_retry(
             client, model, agent.max_tokens,
-            agent.system_prompt, tools, messages,
+            system_with_cache, tools, messages,
             on_event=on_event, agent_id=agent.agent_id
         )
-        token_count += response.usage.input_tokens + response.usage.output_tokens
+        usage = response.usage
+        token_count += usage.input_tokens + usage.output_tokens
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
         tracer.log_api_call(agent.agent_id, messages, response, token_count)
 
         if response.stop_reason == "end_turn":
             break
 
-        # Handle tool calls
+        # Handle tool calls (only when not using injected data)
         tool_results = []
         has_tool_use = False
         for block in response.content:
@@ -359,7 +385,8 @@ async def run_single_case(
     patient_store,
     tracer: TraceLogger,
     model: str = "claude-sonnet-4-20250514",
-    on_event=None
+    on_event=None,
+    injected_tool_data: dict | None = None,
 ) -> CaseResult:
     """Run a complete agent system on a single patient case."""
     def emit(etype, data=None):
@@ -378,20 +405,24 @@ async def run_single_case(
         "ground_truth": ground_truth,
     })
 
+    topo_kwargs = dict(spec=spec, patient_id=patient_id, store=patient_store,
+                       tracer=tracer, model=model, on_event=on_event,
+                       injected_tool_data=injected_tool_data)
+
     if spec.topology == "single":
-        result = await _run_topology_single(spec, patient_id, patient_store, tracer, model, on_event)
+        result = await _run_topology_single(**topo_kwargs)
     elif spec.topology == "pipeline":
-        result = await _run_topology_pipeline(spec, patient_id, patient_store, tracer, model, on_event)
+        result = await _run_topology_pipeline(**topo_kwargs)
     elif spec.topology == "ensemble":
-        result = await _run_topology_ensemble(spec, patient_id, patient_store, tracer, model, on_event)
+        result = await _run_topology_ensemble(**topo_kwargs)
     elif spec.topology == "debate":
-        result = await _run_topology_debate(spec, patient_id, patient_store, tracer, model, on_event)
+        result = await _run_topology_debate(**topo_kwargs)
     elif spec.topology == "hierarchical":
-        result = await _run_topology_hierarchical(spec, patient_id, patient_store, tracer, model, on_event)
+        result = await _run_topology_hierarchical(**topo_kwargs)
     elif spec.topology == "dynamic":
-        result = await _run_topology_dynamic(spec, patient_id, patient_store, tracer, model, on_event)
+        result = await _run_topology_dynamic(**topo_kwargs)
     else:
-        result = await _run_topology_single(spec, patient_id, patient_store, tracer, model, on_event)
+        result = await _run_topology_single(**topo_kwargs)
 
     # Build final CaseResult
     total_tokens = sum(r.token_count for r in result)
@@ -436,36 +467,36 @@ async def run_single_case(
     return case_result
 
 
-async def _run_topology_single(spec, patient_id, store, tracer, model, on_event=None) -> list[AgentResult]:
+async def _run_topology_single(spec, patient_id, store, tracer, model, on_event=None, injected_tool_data=None) -> list[AgentResult]:
     """T1: Single agent."""
     agent = spec.agents[0]
-    result = await _run_agent(agent, patient_id, {}, store, tracer, model, on_event)
+    result = await _run_agent(agent, patient_id, {}, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
     return [result]
 
 
-async def _run_topology_pipeline(spec, patient_id, store, tracer, model, on_event=None) -> list[AgentResult]:
+async def _run_topology_pipeline(spec, patient_id, store, tracer, model, on_event=None, injected_tool_data=None) -> list[AgentResult]:
     """T2: Pipeline — sequential agents, each enriching context."""
     results = []
     context = {}
     for agent in spec.agents:
-        result = await _run_agent(agent, patient_id, context, store, tracer, model, on_event)
+        result = await _run_agent(agent, patient_id, context, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
         context[agent.agent_id] = result.outputs
         context[f"{agent.agent_id}_reasoning"] = result.final_text[:200]
         results.append(result)
     return results
 
 
-async def _run_topology_ensemble(spec, patient_id, store, tracer, model, on_event=None) -> list[AgentResult]:
+async def _run_topology_ensemble(spec, patient_id, store, tracer, model, on_event=None, injected_tool_data=None) -> list[AgentResult]:
     """T3: Ensemble — parallel agents + aggregator."""
     if len(spec.agents) < 2:
-        return await _run_topology_single(spec, patient_id, store, tracer, model, on_event)
+        return await _run_topology_single(spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     worker_agents = spec.agents[:-1]
     aggregator = spec.agents[-1]
 
     # Run workers in parallel
     worker_results = await asyncio.gather(*[
-        _run_agent(a, patient_id, {}, store, tracer, model, on_event)
+        _run_agent(a, patient_id, {}, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
         for a in worker_agents
     ])
 
@@ -476,29 +507,29 @@ async def _run_topology_ensemble(spec, patient_id, store, tracer, model, on_even
             for r in worker_results
         ]
     }
-    agg_result = await _run_agent(aggregator, patient_id, agg_context, store, tracer, model, on_event)
+    agg_result = await _run_agent(aggregator, patient_id, agg_context, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     return list(worker_results) + [agg_result]
 
 
-async def _run_topology_debate(spec, patient_id, store, tracer, model, on_event=None) -> list[AgentResult]:
+async def _run_topology_debate(spec, patient_id, store, tracer, model, on_event=None, injected_tool_data=None) -> list[AgentResult]:
     """T4: Debate — proposer → challenger → judge."""
     if len(spec.agents) < 3:
-        return await _run_topology_pipeline(spec, patient_id, store, tracer, model, on_event)
+        return await _run_topology_pipeline(spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     proposer = spec.agents[0]
     challenger = spec.agents[1]
     judge = spec.agents[2]
 
     # Proposer
-    prop_result = await _run_agent(proposer, patient_id, {}, store, tracer, model, on_event)
+    prop_result = await _run_agent(proposer, patient_id, {}, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     # Challenger receives proposal
     chal_context = {
         "proposal": prop_result.outputs,
         "proposal_reasoning": prop_result.final_text[:300]
     }
-    chal_result = await _run_agent(challenger, patient_id, chal_context, store, tracer, model, on_event)
+    chal_result = await _run_agent(challenger, patient_id, chal_context, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     # Judge receives both
     judge_context = {
@@ -507,22 +538,22 @@ async def _run_topology_debate(spec, patient_id, store, tracer, model, on_event=
         "challenge": chal_result.outputs,
         "challenge_reasoning": chal_result.final_text[:300]
     }
-    judge_result = await _run_agent(judge, patient_id, judge_context, store, tracer, model, on_event)
+    judge_result = await _run_agent(judge, patient_id, judge_context, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     return [prop_result, chal_result, judge_result]
 
 
-async def _run_topology_hierarchical(spec, patient_id, store, tracer, model, on_event=None) -> list[AgentResult]:
+async def _run_topology_hierarchical(spec, patient_id, store, tracer, model, on_event=None, injected_tool_data=None) -> list[AgentResult]:
     """T5: Hierarchical — orchestrator → specialists → synthesizer."""
     if len(spec.agents) < 3:
-        return await _run_topology_pipeline(spec, patient_id, store, tracer, model, on_event)
+        return await _run_topology_pipeline(spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     orchestrator = spec.agents[0]
     specialists = spec.agents[1:-1]
     synthesizer = spec.agents[-1]
 
     # Orchestrator plans
-    orch_result = await _run_agent(orchestrator, patient_id, {}, store, tracer, model, on_event)
+    orch_result = await _run_agent(orchestrator, patient_id, {}, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     # Specialists run in parallel, each receiving orchestrator guidance
     specialist_results = await asyncio.gather(*[
@@ -530,7 +561,7 @@ async def _run_topology_hierarchical(spec, patient_id, store, tracer, model, on_
             s, patient_id,
             {"orchestrator_plan": orch_result.outputs,
              "orchestrator_guidance": orch_result.final_text[:200]},
-            store, tracer, model, on_event
+            store, tracer, model, on_event, injected_tool_data=injected_tool_data
         )
         for s in specialists
     ])
@@ -543,25 +574,25 @@ async def _run_topology_hierarchical(spec, patient_id, store, tracer, model, on_
             for r in specialist_results
         ]
     }
-    synth_result = await _run_agent(synthesizer, patient_id, synth_context, store, tracer, model, on_event)
+    synth_result = await _run_agent(synthesizer, patient_id, synth_context, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     return [orch_result] + list(specialist_results) + [synth_result]
 
 
-async def _run_topology_dynamic(spec, patient_id, store, tracer, model, on_event=None) -> list[AgentResult]:
+async def _run_topology_dynamic(spec, patient_id, store, tracer, model, on_event=None, injected_tool_data=None) -> list[AgentResult]:
     """T6: Dynamic — router selects topology per-case at runtime.
 
     The first agent acts as a router. Based on its output, we dispatch
     to the appropriate topology using the remaining agents.
     """
     if len(spec.agents) < 2:
-        return await _run_topology_single(spec, patient_id, store, tracer, model, on_event)
+        return await _run_topology_single(spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     router = spec.agents[0]
     remaining_agents = spec.agents[1:]
 
     # Router inspects patient and decides topology
-    router_result = await _run_agent(router, patient_id, {}, store, tracer, model, on_event)
+    router_result = await _run_agent(router, patient_id, {}, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     # Parse router's topology choice
     chosen = router_result.outputs.get("selected_topology", "pipeline").lower()
@@ -577,14 +608,14 @@ async def _run_topology_dynamic(spec, patient_id, store, tracer, model, on_event
 
     # Dispatch to chosen topology
     if sub_spec.topology == "single" and remaining_agents:
-        sub_results = await _run_topology_single(sub_spec, patient_id, store, tracer, model, on_event)
+        sub_results = await _run_topology_single(sub_spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
     elif sub_spec.topology == "debate" and len(remaining_agents) >= 3:
-        sub_results = await _run_topology_debate(sub_spec, patient_id, store, tracer, model, on_event)
+        sub_results = await _run_topology_debate(sub_spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
     elif sub_spec.topology == "hierarchical" and len(remaining_agents) >= 3:
-        sub_results = await _run_topology_hierarchical(sub_spec, patient_id, store, tracer, model, on_event)
+        sub_results = await _run_topology_hierarchical(sub_spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
     elif sub_spec.topology == "ensemble" and len(remaining_agents) >= 2:
-        sub_results = await _run_topology_ensemble(sub_spec, patient_id, store, tracer, model, on_event)
+        sub_results = await _run_topology_ensemble(sub_spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
     else:
-        sub_results = await _run_topology_pipeline(sub_spec, patient_id, store, tracer, model, on_event)
+        sub_results = await _run_topology_pipeline(sub_spec, patient_id, store, tracer, model, on_event, injected_tool_data=injected_tool_data)
 
     return [router_result] + sub_results

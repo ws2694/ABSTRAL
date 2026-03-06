@@ -52,7 +52,7 @@ class PatientStore:
 
         label_col = _find_column(self.df, ["bone_metastasis", "label", "target",
                                             "metastasis", "bone_met", "outcome", "y",
-                                            "MST", "METS_BONE"])
+                                            "MST", "METS_BONE", "path"])
         if label_col is None:
             raise ValueError("Cannot find label column in data.")
 
@@ -150,6 +150,29 @@ class PatientStore:
         else:
             record["observation_months"] = 24
 
+        # Lung cancer info
+        lc = {}
+        lc_map = [("lung_cancer_radiation", "radiation"),
+                   ("lung_cancer_chemotherapy", "chemotherapy"),
+                   ("lung_cancer_surgery", "surgery")]
+        for col, key in lc_map:
+            if col in self.df.columns and pd.notna(row.get(col)):
+                lc[key] = bool(int(row[col]))
+        for col, key in [("lung_cancer_visit_count", "visit_count"),
+                          ("lung_cancer_location_count", "location_count")]:
+            if col in self.df.columns and pd.notna(row.get(col)):
+                lc[key] = int(row[col])
+        if lc:
+            record["lung_cancer"] = lc
+
+        # Fractures
+        if "fractures" in self.df.columns and pd.notna(row.get("fractures")):
+            raw = row["fractures"]
+            if isinstance(raw, str):
+                record["fractures"] = json.loads(raw)
+            elif isinstance(raw, list):
+                record["fractures"] = raw
+
         return record
 
     def get(self, patient_id: str) -> dict:
@@ -215,6 +238,30 @@ class PatientStore:
     def get_label(self, patient_id: str) -> int:
         """Get ground truth label."""
         return self.labels[patient_id]
+
+    def precompute_all(self, patient_ids: list[str]) -> dict[str, dict[str, dict]]:
+        """Pre-compute all tool results for a list of patients.
+
+        Returns {pid: {tool_name: result_dict}} for all 4 tools.
+        Results are deterministic and cached, so this is safe to call once
+        before the RUN step and inject into agent prompts.
+        """
+        from tools.drug_kb import DRUG_KB
+
+        precomputed = {}
+        for pid in patient_ids:
+            record = self.get(pid)
+            drug_classes = list(set(
+                m.get("drug_class", "") for m in record.get("medications", [])
+            ))
+
+            precomputed[pid] = {
+                "get_patient_features": self.get_structured(pid),
+                "predict_risk": self.predict(pid),
+                "compute_ops_trajectory": self.get_ops(pid),
+                "lookup_drug_interaction": DRUG_KB.lookup(drug_classes) if drug_classes else {"interactions": [], "note": "No drug classes provided"},
+            }
+        return precomputed
 
     def stratified_sample(self, n: int, seed: int = 42) -> list[str]:
         """Sample n patient IDs with stratified sampling on label."""

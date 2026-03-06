@@ -156,14 +156,15 @@ async def get_config():
     if run_state.config:
         return run_state.config
     return {
-        "data_path": "data/oncoagent_7315.parquet",
+        "data_path": "data/oncoagent.parquet",
         "skill_path": "skills/clinical_agent_builder.md",
         "max_iterations": 15,
         "sandbox_n": 150,
         "model": "claude-sonnet-4-20250514",
         "model_dir": "data/models",
         "random_seed": 42,
-        "max_concurrent": 5,
+        "max_concurrent": 10,
+        "use_batch_api": False,
     }
 
 
@@ -421,12 +422,14 @@ async def _run_abstral_task(config_dict: dict):
         from loop.orchestrator import run_abstral
 
         config = ABSTRALConfig(
-            data_path=config_dict.get("data_path", "data/oncoagent_7315.parquet"),
+            data_path=config_dict.get("data_path", "data/oncoagent.parquet"),
             skill_path=config_dict.get("skill_path", "skills/clinical_agent_builder.md"),
             max_iterations=config_dict.get("max_iterations", 15),
             sandbox_n=config_dict.get("sandbox_n", 150),
             model=config_dict.get("model", "claude-sonnet-4-20250514"),
             model_dir=config_dict.get("model_dir", "data/models"),
+            max_concurrent=config_dict.get("max_concurrent", 10),
+            use_batch_api=config_dict.get("use_batch_api", False),
             random_seed=config_dict.get("random_seed", 42),
         )
 
